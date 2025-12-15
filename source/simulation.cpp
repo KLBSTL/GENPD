@@ -119,6 +119,42 @@ Simulation::Simulation()
 
 
 	use_cs = true;
+
+	if (use_cs)
+	{
+		const char* computeShaderSource = {};
+		computeShader = glCreateShader(GL_COMPUTE_SHADER);
+		glShaderSource(computeShader, 1, &computeShaderSource, NULL);
+		glCompileShader(computeShader);
+
+
+		GLint success = 0;
+		glGetShaderiv(computeShader, GL_COMPILE_STATUS, &success);
+		if (!success) {
+			char infoLog[512];
+			glGetShaderInfoLog(computeShader, 512, NULL, infoLog);
+			std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+		}
+
+		computeProgram = glCreateProgram();
+		glAttachShader(computeProgram, computeShader);
+		glLinkProgram(computeProgram);
+
+
+		glGetProgramiv(computeProgram, GL_LINK_STATUS, &success);
+		if (!success) {
+			char infoLog[512];
+			glGetProgramInfoLog(computeProgram, 512, NULL, infoLog);
+			std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+		}
+
+		glUseProgram(computeProgram);
+
+		glGenBuffers(1, &edgeID);
+		glGenBuffers(1, &gradientID);
+		glGenBuffers(1, &xID);
+
+	}
 }
 
 Simulation::~Simulation()
@@ -126,6 +162,12 @@ Simulation::~Simulation()
 	clearConstraints();
 	m_handles.clear();
 	m_handle_id.clear();
+
+	glDeleteShader(computeShader);
+	glDeleteProgram(computeProgram);
+	glDeleteBuffers(1, &edgeID);
+	glDeleteBuffers(1, &gradientID);
+	glDeleteBuffers(1, &xID);
 
 	DeleteVisualizationMesh();
 }
@@ -154,20 +196,6 @@ void Simulation::Reset()
 	// compute shader
 	if (use_cs)
 	{
-		const char* computeShaderSource = {};
-		computeShader = glCreateShader(GL_COMPUTE_SHADER);
-		glShaderSource(computeShader, 1, &computeShaderSource, NULL);
-		glCompileShader(computeShader);
-
-		computeProgram = glCreateProgram();
-		glAttachShader(computeProgram, computeShader);
-		glLinkProgram(computeProgram);
-
-		glUseProgram(computeProgram);
-
-
-		
-		glGenBuffers(1, &edgeID);
 
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
 		glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
@@ -176,24 +204,17 @@ void Simulation::Reset()
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 
 
-
 		gradient_dir.resize(m_mesh->m_system_dimension);
 		gradient_dir.setZero();
 
-		glGenBuffers(1, &gradientID);
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
 		glBufferData(GL_SHADER_STORAGE_BUFFER, gradient_dir.size() * sizeof(float),
 			gradient_dir.data(), GL_DYNAMIC_DRAW);
 
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
 
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-
-		glGenBuffers(1, &xID); // m_mesh->m_system_dimension
-
-		
-		
-		
 	}
 
 	m_selected_attachment_constraint = NULL;
@@ -2080,7 +2101,7 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 
 	//gradient_dir = m_mesh->m_mass_matrix * (x - m_y) + m_h * m_h * gradient_dir;
 	for (size_t i = 0; i < gradient_dir.size(); ++i) {
-		gradient_dir[i] = m_mesh->m_mass_matrix * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
+		gradient_dir[i] = 1.0 * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
 	}
 
 	//evaluateGradient(x, gradient_dir);
