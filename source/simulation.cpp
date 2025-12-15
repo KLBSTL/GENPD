@@ -115,6 +115,10 @@ Simulation::Simulation()
 	m_verbose_show_optimization_time = false;
 	m_verbose_show_energy = false;
 	m_verbose_show_factorization_warning = true;
+
+
+
+	use_cs = true;
 }
 
 Simulation::~Simulation()
@@ -146,6 +150,51 @@ void Simulation::Reset()
 
 	setupConstraints();
 	SetMaterialProperty();
+
+	// compute shader
+	if (use_cs)
+	{
+		const char* computeShaderSource = {};
+		computeShader = glCreateShader(GL_COMPUTE_SHADER);
+		glShaderSource(computeShader, 1, &computeShaderSource, NULL);
+		glCompileShader(computeShader);
+
+		computeProgram = glCreateProgram();
+		glAttachShader(computeProgram, computeShader);
+		glLinkProgram(computeProgram);
+
+		glUseProgram(computeProgram);
+
+
+		
+		glGenBuffers(1, &edgeID);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
+			m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+
+
+
+		gradient_dir.resize(m_mesh->m_system_dimension);
+		gradient_dir.setZero();
+
+		glGenBuffers(1, &gradientID);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, gradient_dir.size() * sizeof(float),
+			gradient_dir.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+
+
+
+		glGenBuffers(1, &xID); // m_mesh->m_system_dimension
+
+		
+		
+		
+	}
 
 	m_selected_attachment_constraint = NULL;
 	m_step_mode = false;
@@ -233,7 +282,7 @@ void Simulation::Update()
 		// damping
 		dampVelocity();
 	}
-	//¼ÆËã×ÜĞÎ±äÁ¿
+	//è®¡ç®—æ€»å½¢å˜é‡
 	//Evaluatespringlength(m_mesh->m_current_positions);
 
 	//// volume
@@ -273,11 +322,11 @@ void Simulation::Update()
 				std::cerr << "Failed to open file for writing." << std::endl;
 			}
 
-			// Ğ´ÈëÊı¾İ
+			// å†™å…¥æ•°æ®
 			outFile << K_plus_W << std::endl;
 			outFile_1 << K<< std::endl;
 			outFile_2 << W << std::endl;
-			// ¹Ø±ÕÎÄ¼ş
+			// å…³é—­æ–‡ä»¶
 			outFile.close();
 			outFile_1.close();
 			outFile_2.close();
@@ -660,7 +709,7 @@ void Simulation::RotateHandleToValue()
 		m_handles[m_selected_handle_id].RotateToValue(theta);
 		UpdateHandleInfoToConstraints(m_handles[m_selected_handle_id]);
 	}
-}//handle¾ä±ú£¬ÓÃÀ´±êÊ¶Êı¾İµÄ±êÊ¶·û
+}//handleå¥æŸ„ï¼Œç”¨æ¥æ ‡è¯†æ•°æ®çš„æ ‡è¯†ç¬¦
 void Simulation::RotateHandleSetStepSize()
 {
 	if (m_selected_handle_id >= 0)
@@ -955,7 +1004,7 @@ void Simulation::LoadHandleAnimation(const char* filename)
 				>> rotation_amount \
 				>> end_frame;
 
-			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//¹Ø¼üÖ¡¶¯»­µÄĞÅÏ¢´æ´¢
+			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//å…³é”®å¸§åŠ¨ç”»çš„ä¿¡æ¯å­˜å‚¨
 			m_keyframe_handle_unit_rotation_degree.push_back(rotation_amount);
 			m_keyframe_handle_unit_rotation_end_frames.push_back(end_frame);
 		}
@@ -1014,7 +1063,7 @@ void Simulation::SaveHandles(const char* filename)
 	}
 }
 
-void Simulation::LoadHandles(const char* filename)//ÎÄ¼şÖĞ¶ÁÈ¡¸½¼ÓÔ¼Êø
+void Simulation::LoadHandles(const char* filename)//æ–‡ä»¶ä¸­è¯»å–é™„åŠ çº¦æŸ
 {
 	// clear current handles and attachment constraints
 	for (int i = m_handles.size() - 1; i >= 0; --i)
@@ -1169,9 +1218,9 @@ void Simulation::SetConvergedEnergy()
 void Simulation::RandomizePoints()
 {
 	VectorX x;
-	generateRandomVector(m_mesh->m_system_dimension, x);//random¿âÉú³ÉËæ»úÏòÁ¿
+	generateRandomVector(m_mesh->m_system_dimension, x);//randomåº“ç”Ÿæˆéšæœºå‘é‡
 
-	m_mesh->m_current_positions = x;// ½«Éú³ÉµÄËæ»úÏòÁ¿¸³Öµ¸øÍø¸ñµÄµ±Ç°Î»ÖÃ
+	m_mesh->m_current_positions = x;// å°†ç”Ÿæˆçš„éšæœºå‘é‡èµ‹å€¼ç»™ç½‘æ ¼çš„å½“å‰ä½ç½®
 }
 
 // set material property for selected elements
@@ -1286,12 +1335,12 @@ void Simulation::LoadPerConstraintMaterialProperties(const char* filename)
 				infile >> temp_enum; material_type = MaterialType(temp_enum);
 				infile >> mu;
 				infile >> lambda;
-				infile >> kappa;//ÉèÖÃËÄÃæÌå²ÄÖÊµÄÔ¼Êø
+				infile >> kappa;//è®¾ç½®å››é¢ä½“æè´¨çš„çº¦æŸ
 				(*c)->SetMaterialProperty(material_type, mu, lambda, kappa, 2*mu+lambda);
 			}
 			else
 			{
-				infile >> stiffness;//ÉèÖÃ¸Õ¶ÈÏµÊıÓÃÓÚ¼ÆËã
+				infile >> stiffness;//è®¾ç½®åˆšåº¦ç³»æ•°ç”¨äºè®¡ç®—
 				(*c)->SetMaterialProperty(stiffness);
 			}
 		}
@@ -1379,9 +1428,9 @@ void Simulation::setupConstraints()
 	switch(m_mesh->m_mesh_type)
 	{
 	case MESH_TYPE_CLOTH:
-		// procedurally generate constraints including to attachment constraints¸½¼ÓÔ¼ÊøÌõ¼ş¾ÍÊÇ¿ÉÒÔ¹Ì¶¨¶¥µãµÄ
+		// procedurally generate constraints including to attachment constraintsé™„åŠ çº¦æŸæ¡ä»¶å°±æ˜¯å¯ä»¥å›ºå®šé¡¶ç‚¹çš„
 		{
-			// generate stretch constraints. assign a stretch constraint for each edge.À­ÉìÔ¼Êø
+			// generate stretch constraints. assign a stretch constraint for each edge.æ‹‰ä¼¸çº¦æŸ
 			EigenVector3 p1, p2;
 			for(std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
 			{
@@ -1403,7 +1452,7 @@ void Simulation::setupConstraints()
 				m_mesh->m_expanded_system_dimension_1d+=2;
 			}
 
-			// generate bending constraints. naiveÍäÇúÔ¼Êø
+			// generate bending constraints. naiveå¼¯æ›²çº¦æŸ
 			unsigned int i, k;
 			for(i = 0; i < m_mesh->m_dim[0]; ++i)
 			{
@@ -1534,12 +1583,12 @@ void Simulation::setupConstraints()
 	}
 }
 
-void Simulation::dampVelocity()//Ä£ÄâÏÖÊµÊÀ½çÖĞµÄÄ¦éßÁ¦ºÍ×èÁ¦Ğ§¹û
+void Simulation::dampVelocity()//æ¨¡æ‹Ÿç°å®ä¸–ç•Œä¸­çš„æ‘©æª«åŠ›å’Œé˜»åŠ›æ•ˆæœ
 {
 	if (std::abs(m_damping_coefficient) < EPSILON)
 		return;
 
-	m_mesh->m_current_velocities *= 1-m_damping_coefficient;//ÖÊµãµÄËÙ¶È»áÖğ½¥Ç÷ÓÚ0
+	m_mesh->m_current_velocities *= 1-m_damping_coefficient;//è´¨ç‚¹çš„é€Ÿåº¦ä¼šé€æ¸è¶‹äº0
 
 	//// post-processing damping
 	//EigenVector3 pos_mc(0.0, 0.0, 0.0), vel_mc(0.0, 0.0, 0.0);
@@ -1617,7 +1666,7 @@ void Simulation::calculateExternalForce()
 }
 
 VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
-{//½øĞĞÅö×²¼ì²â²¢¼ÆËã²¼ÁÏÓë³¡¾°ÖĞ¾²Ì¬ÎïÌåÖ®¼äµÄ´©Í¸Éî¶È
+{//è¿›è¡Œç¢°æ’æ£€æµ‹å¹¶è®¡ç®—å¸ƒæ–™ä¸åœºæ™¯ä¸­é™æ€ç‰©ä½“ä¹‹é—´çš„ç©¿é€æ·±åº¦
 	// Naive implementation of collision detection
 	VectorX penetration(m_mesh->m_system_dimension);
 	penetration.setZero();
@@ -1630,7 +1679,7 @@ VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
 
 		if (m_scene->StaticIntersectionTest(xi, normal, dist))
 		{
-			penetration.block_vector(i) += (dist) * normal;//´©Í¸Éî¶È
+			penetration.block_vector(i) += (dist) * normal;//ç©¿é€æ·±åº¦
 		}
 	}
 
@@ -1655,14 +1704,14 @@ void Simulation::collisionDetection(const VectorX& x)
 			{
 				surface_point = xi - normal*dist; // dist is negative...
 				m_collision_constraints.push_back(CollisionSpringConstraint(1e3, i, surface_point, normal));
-			}//Ìí¼ÓÅö×²Ô¼Êø Åö×²µ¯»ÉÔ¼Êø
+			}//æ·»åŠ ç¢°æ’çº¦æŸ ç¢°æ’å¼¹ç°§çº¦æŸ
 		}
 
 	}
 }
 
 void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, VectorX& v)
-//ËÙ¶ÈĞŞÕıºÍÎ»ÖÃĞŞÕı
+//é€Ÿåº¦ä¿®æ­£å’Œä½ç½®ä¿®æ­£
 {
 	EigenVector3 xi, vi, pi, ni;
 	EigenVector3 vin, vit;
@@ -1672,15 +1721,15 @@ void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, Vec
 		vi = v.block_vector(i);
 		pi = penetration.block_vector(i);
 
-		ScalarType dist = pi.norm();//¼ÆËã´©Í¸Éî¶È
+		ScalarType dist = pi.norm();//è®¡ç®—ç©¿é€æ·±åº¦
 		if (dist > EPSILON) // there is collision
 		{
 			ni = -pi / dist; // normalize
 			xi -= pi;
-			vin = vi.dot(ni)*ni;//·¨ÏòÁ¿
-			vit = vi - vin;//ÇĞÏòÁ¿
+			vin = vi.dot(ni)*ni;//æ³•å‘é‡
+			vit = vi - vin;//åˆ‡å‘é‡
 			vi = -(m_restitution_coefficient)*vin + (1-m_friction_coefficient) * vit;
-			//¸ù¾İ»Ö¸´ÏµÊı£¨Åö×²Ö®ºóµÄ·´µ¯³Ì¶È£©ºÍÄ¦²ÁÏµÊı£¨Åö×²Ö®ºóµÄÄ¦éßÁ¦´óĞ¡£©¼ÆËãÅö×²Ö®ºóµÄËÙ¶È
+			//æ ¹æ®æ¢å¤ç³»æ•°ï¼ˆç¢°æ’ä¹‹åçš„åå¼¹ç¨‹åº¦ï¼‰å’Œæ‘©æ“¦ç³»æ•°ï¼ˆç¢°æ’ä¹‹åçš„æ‘©æª«åŠ›å¤§å°ï¼‰è®¡ç®—ç¢°æ’ä¹‹åçš„é€Ÿåº¦
 			x.block_vector(i) = xi;
 			v.block_vector(i) = vi;
 		}
@@ -1789,7 +1838,14 @@ void Simulation::integrateImplicitMethod()
 			converge = performNewtonsMethodOneIteration(x);
 			break;
 		case OPTIMIZATION_METHOD_NCG:
-			converge = performNCG(x, beta, gradient_dir, descent_dir);
+			if (use_cs)
+			{
+				converge = performNCG_CS(x, beta, gradient_dir, descent_dir);
+			}
+			else
+			{
+				converge = performNCG(x, beta, gradient_dir, descent_dir);
+			}
 			break;
 		case OPTIMIZATION_METHOD_PNCG:
 			converge = performNCG_LBFGS(x, beta, gradient_dir, descent_dir);
@@ -1876,7 +1932,7 @@ void Simulation::integrateImplicitMethod()
 	outFile_e.close();
 	outFile_t.close();
 
-	if (m_processing_collision)//×îºó½øĞĞÅö×²¼ì²â£¬È·±£ÎïÌåÔÚÄ£Äâ¹ı³Ìµ±ÖĞ²»»á·¢Éú²»ºÏÀíµÄ½á¹û
+	if (m_processing_collision)//æœ€åè¿›è¡Œç¢°æ’æ£€æµ‹ï¼Œç¡®ä¿ç‰©ä½“åœ¨æ¨¡æ‹Ÿè¿‡ç¨‹å½“ä¸­ä¸ä¼šå‘ç”Ÿä¸åˆç†çš„ç»“æœ
 	{
 		VectorX penetration = collisionDetectionPostProcessing(m_mesh->m_current_positions);
 		collisionResolution(penetration, m_mesh->m_current_positions, m_mesh->m_current_velocities);
@@ -1958,6 +2014,88 @@ bool Simulation::performncg(VectorX& x)
 	else
 		return false;
 }
+
+bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir)
+{
+	const char* computeShaderSource = {};
+
+	VectorX LBFGS_Pk;
+
+	LBFGS_Pk = -gradient_dir;
+
+	ScalarType current_energy;
+
+#ifdef ENABLE_MATLAB_DEBUGGING
+	g_debugger->SendVector(gradient_dir, "g");
+#endif
+
+
+	if (gradient_dir.norm() < EPSILON)
+		return true;
+
+	int my_m = 2;
+
+	m_lbfgs_last_x = x;
+	m_lbfgs_last_gradient = gradient_dir;
+
+
+	VectorX descent_dir = LBFGS_Pk;
+
+	descent_dir = LBFGS_Pk + beta * descent_dir;
+
+	ScalarType alpha_k = lineSearch(x, gradient_dir, descent_dir);
+
+	x = x + descent_dir * alpha_k;
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
+		x.data(), GL_DYNAMIC_DRAW);
+
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+
+	VectorX gradient_dir_tmp = gradient_dir;
+
+
+	glDispatchCompute(10, 10, 1);
+
+	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+
+
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+		m_mesh->m_edge_list.size() * sizeof(Edge),
+		m_mesh->m_edge_list.data());
+
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+		gradient_dir.size() * sizeof(float),
+		gradient_dir.data());
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+		x.size() * sizeof(float),
+		x.data());
+
+	//gradient_dir = m_mesh->m_mass_matrix * (x - m_y) + m_h * m_h * gradient_dir;
+	for (size_t i = 0; i < gradient_dir.size(); ++i) {
+		gradient_dir[i] = m_mesh->m_mass_matrix * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
+	}
+
+	//evaluateGradient(x, gradient_dir);
+
+	VectorX g_yk = gradient_dir - gradient_dir_tmp;
+	VectorX x_sk = x - m_lbfgs_last_x;
+	beta = gradient_dir.norm() * gradient_dir.norm() / (gradient_dir_tmp.norm() * gradient_dir_tmp.norm());
+
+	if (-descent_dir.dot(gradient_dir) < EPSILON_SQUARE)
+		return true;
+	else
+		return false;
+
+}
+
 bool Simulation::performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir)
 {
 
@@ -2197,7 +2335,7 @@ bool Simulation::performNewtonsMethodOneIteration(VectorX& x)
 	VectorX descent_dir;
 
 	linearSolve(descent_dir, hessian, gradient);
-	//ÏßĞÔÇó½â²¿·Öµ÷ÓÃÖ±½ÓÇó½â»òÕßµü´úCGÇó½â
+	//çº¿æ€§æ±‚è§£éƒ¨åˆ†è°ƒç”¨ç›´æ¥æ±‚è§£æˆ–è€…è¿­ä»£CGæ±‚è§£
 	descent_dir = -descent_dir;
 
 	timer.TocAndReport("solve time", m_verbose_show_converge);
@@ -2491,7 +2629,7 @@ void Simulation::computeConstantVectorsYandZ()
 		m_y = m_mesh->m_current_positions;
 		break;
 	case INTEGRATION_IMPLICIT_EULER:
-		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + m_h * m_h * m_mesh->m_inv_mass_matrix*m_external_force;
+		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + m_h * m_h * m_mesh->m_inv_mass_matrix * m_external_force;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		m_y = (4 * m_mesh->m_current_positions - m_mesh->m_previous_positions) / 3 + (4 * m_mesh->m_current_velocities - m_mesh->m_previous_velocities + 2*m_h*m_mesh->m_inv_mass_matrix*m_external_force) * m_h * 2.0 / 9.0;
@@ -3759,7 +3897,7 @@ ScalarType Simulation::conjugateGradientWithInitialGuess(VectorX& x, const Spars
 
 	return sqrt(rsnew);
 }
-//Cholesky ·Ö½â
+//Cholesky åˆ†è§£
 void Simulation::factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper>& lltSolver, char* warning_msg)
 {
 	SparseMatrix A_prime = A;

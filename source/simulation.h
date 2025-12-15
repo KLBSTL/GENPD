@@ -363,6 +363,18 @@ protected:
 	// hard coded collision plane for demo
 	bool m_processing_collision;
 
+	// use compute shader
+	bool use_cs;
+	GLuint computeShader;
+	GLuint computeProgram;
+	GLuint edgeID, gradientID,xID;
+
+	VectorX gradient_dir;
+	
+	
+	
+
+
 private:
 
 	// main update sub-routines
@@ -384,6 +396,7 @@ private:
 	bool performNewtonsMethodOneIteration(VectorX& x);
 	bool performLBFGSOneIteration(VectorX& x);// our method
 	bool performncg(VectorX& x);
+	bool performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	void LBFGSKernelLinearSolve(VectorX& r, VectorX gf_k, ScalarType scaled_identity_constant);
