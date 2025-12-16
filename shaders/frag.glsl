@@ -1,4 +1,4 @@
-#version 430
+#version 150
 
 uniform int u_choose_tex;
 uniform sampler2D u_sampler1;

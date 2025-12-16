@@ -39,7 +39,7 @@
 
 #ifdef ENABLE_MATLAB_DEBUGGING
 #include "matlab_debugger.h"
-extern MatlabDebugger *g_debugger;
+extern MatlabDebugger* g_debugger;
 #endif
 
 //#define USE_STL_QUEUE_IMPLEMENTATION
@@ -57,18 +57,18 @@ ScalarType rest_length_adjust = 1; // 1  = normal spring, 0 = zero length spring
 
 // comparison function for sort
 bool compareTriplet(SparseMatrixTriplet i, SparseMatrixTriplet j)
-{ 
-	return (abs(i.value())<abs(j.value())); 
+{
+	return (abs(i.value()) < abs(j.value()));
 }
 
-void Vector3mx1ToMatrixmx3(const VectorX&x, EigenMatrixx3& m)
+void Vector3mx1ToMatrixmx3(const VectorX& x, EigenMatrixx3& m)
 {
 	for (unsigned int i = 0; i < m.rows(); i++)
 	{
 		m.block<1, 3>(i, 0) = x.block_vector(i).transpose();
 	}
 }
-void Vector3mx1ToMatrixmx3(const VectorX&x, Matrix& m)
+void Vector3mx1ToMatrixmx3(const VectorX& x, Matrix& m)
 {
 	for (unsigned int i = 0; i < m.rows(); i++)
 	{
@@ -76,14 +76,14 @@ void Vector3mx1ToMatrixmx3(const VectorX&x, Matrix& m)
 	}
 }
 
-void Matrixmx3ToVector3mx1(const EigenMatrixx3& m, VectorX&x)
+void Matrixmx3ToVector3mx1(const EigenMatrixx3& m, VectorX& x)
 {
 	for (unsigned int i = 0; i < m.rows(); i++)
 	{
 		x.block_vector(i) = m.block<1, 3>(i, 0).transpose();
 	}
 }
-void Matrixmx3ToVector3mx1(const Matrix& m, VectorX&x)
+void Matrixmx3ToVector3mx1(const Matrix& m, VectorX& x)
 {
 	assert(m.cols() == 3);
 
@@ -122,7 +122,61 @@ Simulation::Simulation()
 
 	if (use_cs)
 	{
-		const char* computeShaderSource = {};
+		const char* computeShaderSource = R"(#version 430
+
+layout( local_size_x = 10 ) in;
+
+uniform uint edge_size;
+
+struct Edge
+{
+    uint m_v1, m_v2; // indices of endpoint vertices
+    uint m_tri1, m_tri2; // indices of adjacent faces
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+//layout(std430, binding = 3) buffer m_y {
+//    float m_y[];
+//};
+
+void main() {
+
+    
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < edge_size){
+        Edge e = edges[idx];
+
+        // ªÒ»°∂•µ„À˜“˝
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+
+        vec3 x_ij = vec3(x_pos[i], x_pos[i+1], x_pos[i+2])
+                  - vec3(x_pos[j], x_pos[j+1], x_pos[j+2]);
+
+        vec3 g_ij = 3000 * (length(x_ij) * 0.1) * normalize(x_ij);
+
+        gradient[i]   += g_ij.x;
+        gradient[i+1] += g_ij.y;
+        gradient[i+2] += g_ij.z;
+
+        gradient[j]   -= g_ij.x;
+        gradient[j+1] -= g_ij.y;
+        gradient[j+2] -= g_ij.z;
+    }
+}
+)";
 		computeShader = glCreateShader(GL_COMPUTE_SHADER);
 		glShaderSource(computeShader, 1, &computeShaderSource, NULL);
 		glCompileShader(computeShader);
@@ -173,7 +227,7 @@ Simulation::~Simulation()
 }
 
 void Simulation::Reset()
-{	
+{
 	m_y.resize(m_mesh->m_system_dimension);
 	m_external_force.resize(m_mesh->m_system_dimension);
 
@@ -255,13 +309,13 @@ void Simulation::UpdateAnimation(const int fn)
 		int swing_num = 0;
 		ScalarType swing_step = m_animation_swing_amp / m_animation_swing_half_period;
 		EigenVector3 swing_dir(m_animation_swing_dir[0], m_animation_swing_dir[1], m_animation_swing_dir[2]);
-		int positive_direction = ((fn/m_animation_swing_half_period)%2)?-1:1;
+		int positive_direction = ((fn / m_animation_swing_half_period) % 2) ? -1 : 1;
 		for (std::vector<Constraint*>::iterator c = m_constraints.begin(); c != m_constraints.end(); ++c)
 		{
 			AttachmentConstraint* ac;
 			if (ac = dynamic_cast<AttachmentConstraint*>(*c)) // is attachment constraint
 			{
-				EigenVector3 new_fixed_point = ac->GetFixedPoint() + swing_dir*swing_step*positive_direction;
+				EigenVector3 new_fixed_point = ac->GetFixedPoint() + swing_dir * swing_step * positive_direction;
 				ac->SetFixedPoint(new_fixed_point);
 				if (++swing_num >= m_animation_swing_num)
 				{
@@ -283,7 +337,7 @@ void Simulation::Update()
 	m_last_descent_dir.resize(m_mesh->m_system_dimension);
 	m_last_descent_dir.setZero();
 
-	for (unsigned int substepping_i = 0; substepping_i != m_sub_stepping; substepping_i ++)
+	for (unsigned int substepping_i = 0; substepping_i != m_sub_stepping; substepping_i++)
 	{
 		// update inertia term
 		computeConstantVectorsYandZ();
@@ -299,11 +353,11 @@ void Simulation::Update()
 			integrateImplicitMethod();
 			break;
 		}
-		
+
 		// damping
 		dampVelocity();
 	}
-	//ËÆ°ÁÆóÊÄªÂΩ¢ÂèòÈáè
+	//º∆À„◊‹–Œ±‰¡ø
 	//Evaluatespringlength(m_mesh->m_current_positions);
 
 	//// volume
@@ -339,15 +393,15 @@ void Simulation::Update()
 			std::cout << "Potential Energy = " << W << std::endl;
 			std::cout << "Total Energy = " << K_plus_W << std::endl;
 
-			if (!outFile.is_open()||!outFile_1.is_open() || outFile_2.is_open()) {
+			if (!outFile.is_open() || !outFile_1.is_open() || outFile_2.is_open()) {
 				std::cerr << "Failed to open file for writing." << std::endl;
 			}
 
-			// ÂÜôÂÖ•Êï∞ÊçÆ
+			// –¥»Î ˝æ›
 			outFile << K_plus_W << std::endl;
-			outFile_1 << K<< std::endl;
+			outFile_1 << K << std::endl;
 			outFile_2 << W << std::endl;
-			// ÂÖ≥Èó≠Êñá‰ª∂
+			// πÿ±’Œƒº˛
 			outFile.close();
 			outFile_1.close();
 			outFile_2.close();
@@ -394,7 +448,7 @@ ScalarType Simulation::TryToSelectAttachmentConstraint(const EigenVector3& p0, c
 		AttachmentConstraint* ac;
 		if (ac = dynamic_cast<AttachmentConstraint*>(*c)) // is attachment constraint
 		{
-			ray_point_dist = ((ac->GetFixedPoint()-p0).cross(dir)).norm();
+			ray_point_dist = ((ac->GetFixedPoint() - p0).cross(dir)).norm();
 			if (ray_point_dist < min_dist)
 			{
 				min_dist = ray_point_dist;
@@ -414,7 +468,7 @@ ScalarType Simulation::TryToSelectAttachmentConstraint(const EigenVector3& p0, c
 		SelectAtttachmentConstraint(best_candidate);
 		EigenVector3 fixed_point_temp = m_mesh->m_current_positions.block_vector(m_selected_attachment_constraint->GetConstrainedVertexIndex());
 
-		return (fixed_point_temp-p0).dot(dir); // this is m_cached_projection_plane_distance
+		return (fixed_point_temp - p0).dot(dir); // this is m_cached_projection_plane_distance
 	}
 }
 
@@ -429,8 +483,8 @@ bool Simulation::TryToToggleAttachmentConstraint(const EigenVector3& p0, const E
 	for (unsigned int i = 0; i != m_mesh->m_vertices_number; i++)
 	{
 		p1 = m_mesh->m_current_positions.block_vector(i);
-		
-		ray_point_dist = ((p1-p0).cross(dir)).norm();
+
+		ray_point_dist = ((p1 - p0).cross(dir)).norm();
 		if (ray_point_dist < min_dist)
 		{
 			min_dist = ray_point_dist;
@@ -442,7 +496,7 @@ bool Simulation::TryToToggleAttachmentConstraint(const EigenVector3& p0, const E
 		AttachmentConstraint* ac;
 		if (ac = dynamic_cast<AttachmentConstraint*>(*c)) // is attachment constraint
 		{
-			ray_point_dist = ((ac->GetFixedPoint()-p0).cross(dir)).norm();
+			ray_point_dist = ((ac->GetFixedPoint() - p0).cross(dir)).norm();
 			if (ray_point_dist < min_dist)
 			{
 				min_dist = ray_point_dist;
@@ -467,8 +521,8 @@ bool Simulation::TryToToggleAttachmentConstraint(const EigenVector3& p0, const E
 				current_state_on = true;
 				m_constraints.erase(c);
 				delete ac;
-				m_mesh->m_expanded_system_dimension-=3;
-				m_mesh->m_expanded_system_dimension_1d-=1;
+				m_mesh->m_expanded_system_dimension -= 3;
+				m_mesh->m_expanded_system_dimension_1d -= 1;
 				break;
 			}
 		}
@@ -501,8 +555,8 @@ AttachmentConstraint* Simulation::AddAttachmentConstraint(unsigned int vertex_in
 	AttachmentConstraint* ac = new AttachmentConstraint(vertex_index, m_mesh->m_current_positions.block_vector(vertex_index));
 	ac->SetMaterialProperty(m_stiffness_attachment);
 	m_constraints.push_back(ac);
-	m_mesh->m_expanded_system_dimension+=3;
-	m_mesh->m_expanded_system_dimension_1d+=1;
+	m_mesh->m_expanded_system_dimension += 3;
+	m_mesh->m_expanded_system_dimension_1d += 1;
 
 	return ac;
 }
@@ -555,8 +609,8 @@ void Simulation::LoadAttachmentConstraint(const char* filename)
 		{
 			c = m_constraints.erase(c);
 			delete ac;
-			m_mesh->m_expanded_system_dimension-=3;
-			m_mesh->m_expanded_system_dimension_1d-=1;
+			m_mesh->m_expanded_system_dimension -= 3;
+			m_mesh->m_expanded_system_dimension_1d -= 1;
 		}
 		else
 		{
@@ -570,7 +624,7 @@ void Simulation::LoadAttachmentConstraint(const char* filename)
 	char ignore[256];
 	if (infile.is_open())
 	{
-		while(!infile.eof())
+		while (!infile.eof())
 		{
 			int id;
 			EigenVector3 p;
@@ -581,8 +635,8 @@ void Simulation::LoadAttachmentConstraint(const char* filename)
 				AttachmentConstraint* ac = new AttachmentConstraint(id, p);
 				ac->SetMaterialProperty(m_stiffness_attachment);
 				m_constraints.push_back(ac);
-				m_mesh->m_expanded_system_dimension+=3;
-				m_mesh->m_expanded_system_dimension_1d+=1;
+				m_mesh->m_expanded_system_dimension += 3;
+				m_mesh->m_expanded_system_dimension_1d += 1;
 			}
 			else
 				break;
@@ -606,10 +660,10 @@ void Simulation::NewHandle(const std::vector<unsigned int>& indices, const glm::
 	}
 
 	// new handle
-	VectorX vertices(3*indices.size());
+	VectorX vertices(3 * indices.size());
 	for (unsigned int i = 0; i != indices.size(); ++i)
 	{
-		vertices.block<3,1>(i*3, 0) = m_mesh->m_current_positions.block<3,1>(indices[i] * 3, 0);
+		vertices.block<3, 1>(i * 3, 0) = m_mesh->m_current_positions.block<3, 1>(indices[i] * 3, 0);
 	}
 
 	int id = m_handles.size();
@@ -675,7 +729,7 @@ void Simulation::DeleteHandle()
 			}
 			else if (m_handle_id[i] > m_selected_handle_id)
 			{
-				m_handle_id[i] --;
+				m_handle_id[i]--;
 			}
 		}
 		m_selected_handle_id = -1;
@@ -730,7 +784,7 @@ void Simulation::RotateHandleToValue()
 		m_handles[m_selected_handle_id].RotateToValue(theta);
 		UpdateHandleInfoToConstraints(m_handles[m_selected_handle_id]);
 	}
-}//handleÂè•ÊüÑÔºåÁî®Êù•Ê†áËØÜÊï∞ÊçÆÁöÑÊ†áËØÜÁ¨¶
+}//handleæ‰±˙£¨”√¿¥±Í ∂ ˝æ›µƒ±Í ∂∑˚
 void Simulation::RotateHandleSetStepSize()
 {
 	if (m_selected_handle_id >= 0)
@@ -951,11 +1005,11 @@ void Simulation::SaveHandleAnimation(const char* filename)
 
 		for (int i = 0; i != m_keyframe_handle_unit_translation_total_segments; ++i)
 		{
-			outfile	<< m_keyframe_handle_unit_translation_axis[i].x() << " " \
+			outfile << m_keyframe_handle_unit_translation_axis[i].x() << " " \
 				<< m_keyframe_handle_unit_translation_axis[i].y() << " " \
 				<< m_keyframe_handle_unit_translation_axis[i].z() << " " \
 				<< m_keyframe_handle_unit_translation_amount[i] << " " \
-				<< m_keyframe_handle_unit_translation_end_frames[i] <<	std::endl << std::endl;
+				<< m_keyframe_handle_unit_translation_end_frames[i] << std::endl << std::endl;
 		}
 
 		outfile << "KeyframedHandleIDR   " << m_keyframe_handle_id_rotation << std::endl << std::endl;
@@ -1001,10 +1055,10 @@ void Simulation::LoadHandleAnimation(const char* filename)
 			ScalarType translation_amount;
 			int end_frame;
 			infile >> translation_axis[0] \
-				   >> translation_axis[1] \
-				   >> translation_axis[2] \
-				   >> translation_amount \
-				   >> end_frame;
+				>> translation_axis[1] \
+				>> translation_axis[2] \
+				>> translation_amount \
+				>> end_frame;
 
 			m_keyframe_handle_unit_translation_axis.push_back(translation_axis);
 			m_keyframe_handle_unit_translation_amount.push_back(translation_amount);
@@ -1025,7 +1079,7 @@ void Simulation::LoadHandleAnimation(const char* filename)
 				>> rotation_amount \
 				>> end_frame;
 
-			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//ÂÖ≥ÈîÆÂ∏ßÂä®ÁîªÁöÑ‰ø°ÊÅØÂ≠òÂÇ®
+			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//πÿº¸÷°∂Øª≠µƒ–≈œ¢¥Ê¥¢
 			m_keyframe_handle_unit_rotation_degree.push_back(rotation_amount);
 			m_keyframe_handle_unit_rotation_end_frames.push_back(end_frame);
 		}
@@ -1056,11 +1110,11 @@ void Simulation::SaveHandles(const char* filename)
 			//outfile << "Rotation2D  " << m_handles[i].RotationAngle2d() << std::endl;
 			outfile << "RotationCenter "
 				<< m_handles[i].CoM()[0] << " "
-				<< m_handles[i].CoM()[1] << " " 
+				<< m_handles[i].CoM()[1] << " "
 				<< m_handles[i].CoM()[2] << std::endl;
 			outfile << "Translation "
 				<< m_handles[i].Translation()[0] << " "
-				<< m_handles[i].Translation()[1] << " " 
+				<< m_handles[i].Translation()[1] << " "
 				<< m_handles[i].Translation()[2] << std::endl;
 			EigenAngleAxis aa(m_handles[i].Rotation());
 			outfile << "Rotation "
@@ -1084,7 +1138,7 @@ void Simulation::SaveHandles(const char* filename)
 	}
 }
 
-void Simulation::LoadHandles(const char* filename)//Êñá‰ª∂‰∏≠ËØªÂèñÈôÑÂä†Á∫¶Êùü
+void Simulation::LoadHandles(const char* filename)//Œƒº˛÷–∂¡»°∏Ωº”‘º ¯
 {
 	// clear current handles and attachment constraints
 	for (int i = m_handles.size() - 1; i >= 0; --i)
@@ -1130,10 +1184,10 @@ void Simulation::LoadHandles(const char* filename)//Êñá‰ª∂‰∏≠ËØªÂèñÈôÑÂä†Á∫¶Êùü
 			{
 				infile >> ids[j];
 			}
-			VectorX vertices(3*ids.size());
+			VectorX vertices(3 * ids.size());
 			for (unsigned int i = 0; i != ids.size(); ++i)
 			{
-				vertices.block<3,1>(i*3, 0) = m_mesh->m_restpose_positions.block<3,1>(3*ids[i], 0).transpose();
+				vertices.block<3, 1>(i * 3, 0) = m_mesh->m_restpose_positions.block<3, 1>(3 * ids[i], 0).transpose();
 			}
 			Handle h(ids, vertices, color, hi);
 			//h.RotationAngle2d() = rotation2d;
@@ -1206,7 +1260,7 @@ void Simulation::SaveSparseMatrix(const SparseMatrix& A, const char* filename)
 	}
 }
 
-void Simulation::SaveLaplacianMatrix(const char * filename)
+void Simulation::SaveLaplacianMatrix(const char* filename)
 {
 	SaveSparseMatrix(m_weighted_laplacian, filename);
 	//std::ofstream outfile;
@@ -1239,9 +1293,9 @@ void Simulation::SetConvergedEnergy()
 void Simulation::RandomizePoints()
 {
 	VectorX x;
-	generateRandomVector(m_mesh->m_system_dimension, x);//randomÂ∫ìÁîüÊàêÈöèÊú∫ÂêëÈáè
+	generateRandomVector(m_mesh->m_system_dimension, x);//randomø‚…˙≥…ÀÊª˙œÚ¡ø
 
-	m_mesh->m_current_positions = x;// Â∞ÜÁîüÊàêÁöÑÈöèÊú∫ÂêëÈáèËµãÂÄºÁªôÁΩëÊ†ºÁöÑÂΩìÂâç‰ΩçÁΩÆ
+	m_mesh->m_current_positions = x;// Ω´…˙≥…µƒÀÊª˙œÚ¡ø∏≥÷µ∏¯Õ¯∏Òµƒµ±«∞Œª÷√
 }
 
 // set material property for selected elements
@@ -1309,7 +1363,7 @@ void Simulation::SetPartialMaterialProperty()
 {
 	if (!m_selected_constraints.empty())
 	{
-		SetMaterialProperty(m_selected_constraints, m_partial_material_type, m_partial_stiffness_stretch, m_partial_stiffness_bending, m_partial_stiffness_kappa, 2*m_partial_stiffness_stretch+m_partial_stiffness_bending);
+		SetMaterialProperty(m_selected_constraints, m_partial_material_type, m_partial_stiffness_stretch, m_partial_stiffness_bending, m_partial_stiffness_kappa, 2 * m_partial_stiffness_stretch + m_partial_stiffness_bending);
 	}
 
 }
@@ -1356,12 +1410,12 @@ void Simulation::LoadPerConstraintMaterialProperties(const char* filename)
 				infile >> temp_enum; material_type = MaterialType(temp_enum);
 				infile >> mu;
 				infile >> lambda;
-				infile >> kappa;//ËÆæÁΩÆÂõõÈù¢‰ΩìÊùêË¥®ÁöÑÁ∫¶Êùü
-				(*c)->SetMaterialProperty(material_type, mu, lambda, kappa, 2*mu+lambda);
+				infile >> kappa;//…Ë÷√Àƒ√ÊÃÂ≤ƒ÷ µƒ‘º ¯
+				(*c)->SetMaterialProperty(material_type, mu, lambda, kappa, 2 * mu + lambda);
 			}
 			else
 			{
-				infile >> stiffness;//ËÆæÁΩÆÂàöÂ∫¶Á≥ªÊï∞Áî®‰∫éËÆ°ÁÆó
+				infile >> stiffness;//…Ë÷√∏’∂»œµ ˝”√”⁄º∆À„
 				(*c)->SetMaterialProperty(stiffness);
 			}
 		}
@@ -1446,170 +1500,170 @@ void Simulation::setupConstraints()
 
 	m_stiffness_high = 1e5;
 
-	switch(m_mesh->m_mesh_type)
+	switch (m_mesh->m_mesh_type)
 	{
 	case MESH_TYPE_CLOTH:
-		// procedurally generate constraints including to attachment constraintsÈôÑÂä†Á∫¶ÊùüÊù°‰ª∂Â∞±ÊòØÂèØ‰ª•Âõ∫ÂÆöÈ°∂ÁÇπÁöÑ
+		// procedurally generate constraints including to attachment constraints∏Ωº”‘º ¯Ãıº˛æÕ «ø…“‘πÃ∂®∂•µ„µƒ
+	{
+		// generate stretch constraints. assign a stretch constraint for each edge.¿≠…Ï‘º ¯
+		EigenVector3 p1, p2;
+		for (std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
 		{
-			// generate stretch constraints. assign a stretch constraint for each edge.Êãâ‰º∏Á∫¶Êùü
-			EigenVector3 p1, p2;
-			for(std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
+			p1 = m_mesh->m_current_positions.block_vector(e->m_v1);
+			p2 = m_mesh->m_current_positions.block_vector(e->m_v2);
+			SpringConstraint* c;
+			//if (e - m_mesh->m_edge_list.begin() < 100)
+			//{
+			//	c = new SpringConstraint(&m_stiffness_high, e->m_v1, e->m_v2, (p1 - p2).norm());
+			//}
+			//else
 			{
-				p1 = m_mesh->m_current_positions.block_vector(e->m_v1);
-				p2 = m_mesh->m_current_positions.block_vector(e->m_v2);
-				SpringConstraint* c;
-				//if (e - m_mesh->m_edge_list.begin() < 100)
-				//{
-				//	c = new SpringConstraint(&m_stiffness_high, e->m_v1, e->m_v2, (p1 - p2).norm());
-				//}
-				//else
+				ScalarType rest_length = (p1 - p2).norm();
+				rest_length *= rest_length_adjust;
+				c = new SpringConstraint(e->m_v1, e->m_v2, rest_length);
+			}
+			m_constraints.push_back(c);
+			m_mesh->m_expanded_system_dimension += 6;
+			m_mesh->m_expanded_system_dimension_1d += 2;
+		}
+
+		// generate bending constraints. naiveÕ‰«˙‘º ¯
+		unsigned int i, k;
+		for (i = 0; i < m_mesh->m_dim[0]; ++i)
+		{
+			for (k = 0; k < m_mesh->m_dim[1]; ++k)
+			{
+				unsigned int index_self = m_mesh->m_dim[1] * i + k;
+				p1 = m_mesh->m_current_positions.block_vector(index_self);
+				if (i + 2 < m_mesh->m_dim[0])
 				{
+					unsigned int index_row_1 = m_mesh->m_dim[1] * (i + 2) + k;
+					p2 = m_mesh->m_current_positions.block_vector(index_row_1);
 					ScalarType rest_length = (p1 - p2).norm();
 					rest_length *= rest_length_adjust;
-					c = new SpringConstraint(e->m_v1, e->m_v2, rest_length);
+					SpringConstraint* c = new SpringConstraint(CONSTRAINT_TYPE_SPRING_BENDING, index_self, index_row_1, rest_length);
+					m_constraints.push_back(c);
+					m_mesh->m_expanded_system_dimension += 6;
+					m_mesh->m_expanded_system_dimension_1d += 2;
 				}
-				m_constraints.push_back(c);
-				m_mesh->m_expanded_system_dimension+=6;
-				m_mesh->m_expanded_system_dimension_1d+=2;
-			}
-
-			// generate bending constraints. naiveÂºØÊõ≤Á∫¶Êùü
-			unsigned int i, k;
-			for(i = 0; i < m_mesh->m_dim[0]; ++i)
-			{
-				for(k = 0; k < m_mesh->m_dim[1]; ++k)
+				if (k + 2 < m_mesh->m_dim[1])
 				{
-					unsigned int index_self = m_mesh->m_dim[1] * i + k;
-					p1 = m_mesh->m_current_positions.block_vector(index_self);
-					if (i+2 < m_mesh->m_dim[0])
-					{
-						unsigned int index_row_1 = m_mesh->m_dim[1] * (i + 2) + k;
-						p2 = m_mesh->m_current_positions.block_vector(index_row_1);
-						ScalarType rest_length = (p1 - p2).norm();
-						rest_length *= rest_length_adjust;
-						SpringConstraint* c = new SpringConstraint(CONSTRAINT_TYPE_SPRING_BENDING, index_self, index_row_1, rest_length);
-						m_constraints.push_back(c);
-						m_mesh->m_expanded_system_dimension+=6;
-						m_mesh->m_expanded_system_dimension_1d+=2;
-					}
-					if (k+2 < m_mesh->m_dim[1])
-					{
-						unsigned int index_column_1 = m_mesh->m_dim[1] * i + k + 2;
-						p2 = m_mesh->m_current_positions.block_vector(index_column_1);
-						ScalarType rest_length = (p1 - p2).norm();
-						rest_length *= rest_length_adjust;
-						SpringConstraint* c = new SpringConstraint(CONSTRAINT_TYPE_SPRING_BENDING, index_self, index_column_1, rest_length);
-						m_constraints.push_back(c);
-						m_mesh->m_expanded_system_dimension+=6;
-						m_mesh->m_expanded_system_dimension_1d+=2;
-					}
+					unsigned int index_column_1 = m_mesh->m_dim[1] * i + k + 2;
+					p2 = m_mesh->m_current_positions.block_vector(index_column_1);
+					ScalarType rest_length = (p1 - p2).norm();
+					rest_length *= rest_length_adjust;
+					SpringConstraint* c = new SpringConstraint(CONSTRAINT_TYPE_SPRING_BENDING, index_self, index_column_1, rest_length);
+					m_constraints.push_back(c);
+					m_mesh->m_expanded_system_dimension += 6;
+					m_mesh->m_expanded_system_dimension_1d += 2;
 				}
 			}
-
-			// generating attachment constraints.
-			//std::vector<unsigned int> handle_1_indices; handle_1_indices.clear(); handle_1_indices.push_back(0);
-			//std::vector<unsigned int> handle_2_indices; handle_2_indices.clear(); handle_2_indices.push_back(m_mesh->m_dim[1] * (m_mesh->m_dim[0] - 1));
-			NewHandle({ 0 }, glm::vec3(1.0, 0.0, 0.0));
-			NewHandle({ m_mesh->m_dim[1] * (m_mesh->m_dim[0] - 1) }, glm::vec3(1.0, 0.0, 0.0));
-			//AddAttachmentConstraint(0);
-			//AddAttachmentConstraint(m_mesh->m_dim[1]*(m_mesh->m_dim[0]-1));
 		}
-		break;
+
+		// generating attachment constraints.
+		//std::vector<unsigned int> handle_1_indices; handle_1_indices.clear(); handle_1_indices.push_back(0);
+		//std::vector<unsigned int> handle_2_indices; handle_2_indices.clear(); handle_2_indices.push_back(m_mesh->m_dim[1] * (m_mesh->m_dim[0] - 1));
+		NewHandle({ 0 }, glm::vec3(1.0, 0.0, 0.0));
+		NewHandle({ m_mesh->m_dim[1] * (m_mesh->m_dim[0] - 1) }, glm::vec3(1.0, 0.0, 0.0));
+		//AddAttachmentConstraint(0);
+		//AddAttachmentConstraint(m_mesh->m_dim[1]*(m_mesh->m_dim[0]-1));
+	}
+	break;
 	case MESH_TYPE_TET:
+	{
+		//// generate stretch constraints. assign a stretch constraint for each edge.
+		//EigenVector3 p1, p2;
+		//for(std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
+		//{
+		//	p1 = m_mesh->m_current_positions.block_vector(e->m_v1);
+		//	p2 = m_mesh->m_current_positions.block_vector(e->m_v2);
+		//	SpringConstraint *c = new SpringConstraint(&m_stiffness_stretch, e->m_v1, e->m_v2, (p1-p2).norm());
+		//	m_constraints.push_back(c);
+		//}
+
+		// reset mass matrix for tet simulation:
+		ScalarType total_volume = 0;
+		std::vector<SparseMatrixTriplet> mass_triplets;
+		std::vector<SparseMatrixTriplet> mass_1d_triplets;
+		mass_triplets.clear();
+		mass_1d_triplets.clear();
+
+		VectorX& x = m_mesh->m_current_positions;
+		TetMesh* tet_mesh = dynamic_cast<TetMesh*>(m_mesh);
+		for (unsigned int i = 0; i < tet_mesh->m_loaded_mesh->m_tets.size(); ++i)
 		{
-			//// generate stretch constraints. assign a stretch constraint for each edge.
-			//EigenVector3 p1, p2;
-			//for(std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
-			//{
-			//	p1 = m_mesh->m_current_positions.block_vector(e->m_v1);
-			//	p2 = m_mesh->m_current_positions.block_vector(e->m_v2);
-			//	SpringConstraint *c = new SpringConstraint(&m_stiffness_stretch, e->m_v1, e->m_v2, (p1-p2).norm());
-			//	m_constraints.push_back(c);
-			//}
+			MeshLoader::Tet& tet = tet_mesh->m_loaded_mesh->m_tets[i];
+			TetConstraint* c = new TetConstraint(tet.id1, tet.id2, tet.id3, tet.id4, x);
+			m_constraints.push_back(c);
 
-			// reset mass matrix for tet simulation:
-			ScalarType total_volume = 0;
-			std::vector<SparseMatrixTriplet> mass_triplets;
-			std::vector<SparseMatrixTriplet> mass_1d_triplets;
-			mass_triplets.clear();
-			mass_1d_triplets.clear();
+			total_volume += c->SetMassMatrix(mass_triplets, mass_1d_triplets);
 
-			VectorX& x = m_mesh->m_current_positions;
-			TetMesh* tet_mesh = dynamic_cast<TetMesh*>(m_mesh);
-			for (unsigned int i = 0; i < tet_mesh->m_loaded_mesh->m_tets.size(); ++i)
+			m_mesh->m_expanded_system_dimension += 9;
+			m_mesh->m_expanded_system_dimension_1d += 3;
+		}
+
+		m_mesh->m_mass_matrix.setFromTriplets(mass_triplets.begin(), mass_triplets.end());
+		m_mesh->m_mass_matrix_1d.setFromTriplets(mass_1d_triplets.begin(), mass_1d_triplets.end());
+
+		m_mesh->m_mass_matrix = m_mesh->m_mass_matrix * (m_mesh->m_total_mass / total_volume);
+		m_mesh->m_mass_matrix_1d = m_mesh->m_mass_matrix_1d * (m_mesh->m_total_mass / total_volume);
+
+		std::vector<SparseMatrixTriplet> mass_inv_triplets;
+		mass_inv_triplets.clear();
+		std::vector<SparseMatrixTriplet> mass_inv_1d_triplets;
+		mass_inv_1d_triplets.clear();
+		for (unsigned int i = 0; i != m_mesh->m_mass_matrix.rows(); i++)
+		{
+			ScalarType mi = m_mesh->m_mass_matrix.coeff(i, i);
+			ScalarType mi_inv;
+			if (std::abs(mi) > 1e-12)
 			{
-				MeshLoader::Tet& tet = tet_mesh->m_loaded_mesh->m_tets[i];
-				TetConstraint *c = new TetConstraint(tet.id1, tet.id2, tet.id3, tet.id4, x);
-				m_constraints.push_back(c);
-
-				total_volume += c->SetMassMatrix(mass_triplets, mass_1d_triplets);
-
-				m_mesh->m_expanded_system_dimension+=9;
-				m_mesh->m_expanded_system_dimension_1d+=3;
+				mi_inv = 1.0 / mi;
 			}
-
-			m_mesh->m_mass_matrix.setFromTriplets(mass_triplets.begin(), mass_triplets.end());
-			m_mesh->m_mass_matrix_1d.setFromTriplets(mass_1d_triplets.begin(), mass_1d_triplets.end());
-
-			m_mesh->m_mass_matrix = m_mesh->m_mass_matrix * (m_mesh->m_total_mass / total_volume);
-			m_mesh->m_mass_matrix_1d = m_mesh->m_mass_matrix_1d * (m_mesh->m_total_mass / total_volume);
-
-			std::vector<SparseMatrixTriplet> mass_inv_triplets;
-			mass_inv_triplets.clear();
-			std::vector<SparseMatrixTriplet> mass_inv_1d_triplets;
-			mass_inv_1d_triplets.clear();
-			for (unsigned int i = 0; i != m_mesh->m_mass_matrix.rows(); i++)
+			else
 			{
-				ScalarType mi = m_mesh->m_mass_matrix.coeff(i, i);
-				ScalarType mi_inv;
-				if (std::abs(mi) > 1e-12)
-				{
-					mi_inv = 1.0 / mi;
-				}
-				else
-				{
-					// ugly ugly!
-					m_mesh->m_mass_matrix.coeffRef(i, i) = 1e-12;
-					mi_inv = 1e12;
-				}
-				mass_inv_triplets.push_back(SparseMatrixTriplet(i, i, mi_inv));
+				// ugly ugly!
+				m_mesh->m_mass_matrix.coeffRef(i, i) = 1e-12;
+				mi_inv = 1e12;
 			}
-			for (unsigned int i = 0; i != m_mesh->m_mass_matrix_1d.rows(); i++)
+			mass_inv_triplets.push_back(SparseMatrixTriplet(i, i, mi_inv));
+		}
+		for (unsigned int i = 0; i != m_mesh->m_mass_matrix_1d.rows(); i++)
+		{
+			ScalarType mi = m_mesh->m_mass_matrix_1d.coeff(i, i);
+			ScalarType mi_inv;
+			if (std::abs(mi) > 1e-12)
 			{
-				ScalarType mi = m_mesh->m_mass_matrix_1d.coeff(i, i);
-				ScalarType mi_inv;
-				if (std::abs(mi) > 1e-12)
-				{
-					mi_inv = 1.0 / mi;
-				}
-				else
-				{
-					// ugly ugly!
-					m_mesh->m_mass_matrix_1d.coeffRef(i, i) = 1e-12;
-					mi_inv = 1e12;
-				}
-				mass_inv_1d_triplets.push_back(SparseMatrixTriplet(i, i, mi_inv));
+				mi_inv = 1.0 / mi;
 			}
+			else
+			{
+				// ugly ugly!
+				m_mesh->m_mass_matrix_1d.coeffRef(i, i) = 1e-12;
+				mi_inv = 1e12;
+			}
+			mass_inv_1d_triplets.push_back(SparseMatrixTriplet(i, i, mi_inv));
+		}
 
-			m_mesh->m_inv_mass_matrix.setFromTriplets(mass_inv_triplets.begin(), mass_inv_triplets.end());
-			m_mesh->m_inv_mass_matrix_1d.setFromTriplets(mass_inv_1d_triplets.begin(), mass_inv_1d_triplets.end());
+		m_mesh->m_inv_mass_matrix.setFromTriplets(mass_inv_triplets.begin(), mass_inv_triplets.end());
+		m_mesh->m_inv_mass_matrix_1d.setFromTriplets(mass_inv_1d_triplets.begin(), mass_inv_1d_triplets.end());
 
 #ifdef ENABLE_MATLAB_DEBUGGING
-			g_debugger->SendSparseMatrix(m_mesh->m_mass_matrix, "M");
-			g_debugger->SendSparseMatrix(m_mesh->m_inv_mass_matrix, "M_inv");
-			g_debugger->SendSparseMatrix(m_mesh->m_mass_matrix_1d, "M_1d");
+		g_debugger->SendSparseMatrix(m_mesh->m_mass_matrix, "M");
+		g_debugger->SendSparseMatrix(m_mesh->m_inv_mass_matrix, "M_inv");
+		g_debugger->SendSparseMatrix(m_mesh->m_mass_matrix_1d, "M_1d");
 #endif
 	}
-		break;
+	break;
 	}
 }
 
-void Simulation::dampVelocity()//Ê®°ÊãüÁé∞ÂÆû‰∏ñÁïå‰∏≠ÁöÑÊë©Ê™´ÂäõÂíåÈòªÂäõÊïàÊûú
+void Simulation::dampVelocity()//ƒ£ƒ‚œ÷ µ ¿ΩÁ÷–µƒƒ¶Èﬂ¡¶∫Õ◊Ë¡¶–ßπ˚
 {
 	if (std::abs(m_damping_coefficient) < EPSILON)
 		return;
 
-	m_mesh->m_current_velocities *= 1-m_damping_coefficient;//Ë¥®ÁÇπÁöÑÈÄüÂ∫¶‰ºöÈÄêÊ∏êË∂ã‰∫é0
+	m_mesh->m_current_velocities *= 1 - m_damping_coefficient;//÷ µ„µƒÀŸ∂»ª·÷Ω•«˜”⁄0
 
 	//// post-processing damping
 	//EigenVector3 pos_mc(0.0, 0.0, 0.0), vel_mc(0.0, 0.0, 0.0);
@@ -1671,15 +1725,15 @@ void Simulation::calculateExternalForce()
 	// gravity
 	for (unsigned int i = 0; i < m_mesh->m_vertices_number; ++i)
 	{
-		m_external_force[3*i+1] += -m_gravity_constant;
+		m_external_force[3 * i + 1] += -m_gravity_constant;
 		//wind
 		m_external_force[3 * i + 0] += m_wind_x;
 		m_external_force[3 * i + 1] += m_wind_y;
 		m_external_force[3 * i + 2] += m_wind_z;
 	}
-	
-	
-	  
+
+
+
 #ifdef ENABLE_MATLAB_DEBUGGING
 	g_debugger->SendSparseMatrix(m_mesh->m_mass_matrix, "M");
 #endif
@@ -1687,7 +1741,7 @@ void Simulation::calculateExternalForce()
 }
 
 VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
-{//ËøõË°åÁ¢∞ÊíûÊ£ÄÊµãÂπ∂ËÆ°ÁÆóÂ∏ÉÊñô‰∏éÂú∫ÊôØ‰∏≠ÈùôÊÄÅÁâ©‰Ωì‰πãÈó¥ÁöÑÁ©øÈÄèÊ∑±Â∫¶
+{//Ω¯––≈ˆ◊≤ºÏ≤‚≤¢º∆À„≤º¡œ”Î≥°æ∞÷–æ≤Ã¨ŒÔÃÂ÷Æº‰µƒ¥©Õ∏…Ó∂»
 	// Naive implementation of collision detection
 	VectorX penetration(m_mesh->m_system_dimension);
 	penetration.setZero();
@@ -1700,7 +1754,7 @@ VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
 
 		if (m_scene->StaticIntersectionTest(xi, normal, dist))
 		{
-			penetration.block_vector(i) += (dist) * normal;//Á©øÈÄèÊ∑±Â∫¶
+			penetration.block_vector(i) += (dist)*normal;//¥©Õ∏…Ó∂»
 		}
 	}
 
@@ -1723,16 +1777,16 @@ void Simulation::collisionDetection(const VectorX& x)
 
 			if (m_scene->StaticIntersectionTest(xi, normal, dist))
 			{
-				surface_point = xi - normal*dist; // dist is negative...
+				surface_point = xi - normal * dist; // dist is negative...
 				m_collision_constraints.push_back(CollisionSpringConstraint(1e3, i, surface_point, normal));
-			}//Ê∑ªÂä†Á¢∞ÊíûÁ∫¶Êùü Á¢∞ÊíûÂºπÁ∞ßÁ∫¶Êùü
+			}//ÃÌº”≈ˆ◊≤‘º ¯ ≈ˆ◊≤µØª…‘º ¯
 		}
 
 	}
 }
 
 void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, VectorX& v)
-//ÈÄüÂ∫¶‰øÆÊ≠£Âíå‰ΩçÁΩÆ‰øÆÊ≠£
+//ÀŸ∂»–ﬁ’˝∫ÕŒª÷√–ﬁ’˝
 {
 	EigenVector3 xi, vi, pi, ni;
 	EigenVector3 vin, vit;
@@ -1742,15 +1796,15 @@ void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, Vec
 		vi = v.block_vector(i);
 		pi = penetration.block_vector(i);
 
-		ScalarType dist = pi.norm();//ËÆ°ÁÆóÁ©øÈÄèÊ∑±Â∫¶
+		ScalarType dist = pi.norm();//º∆À„¥©Õ∏…Ó∂»
 		if (dist > EPSILON) // there is collision
 		{
 			ni = -pi / dist; // normalize
 			xi -= pi;
-			vin = vi.dot(ni)*ni;//Ê≥ïÂêëÈáè
-			vit = vi - vin;//ÂàáÂêëÈáè
-			vi = -(m_restitution_coefficient)*vin + (1-m_friction_coefficient) * vit;
-			//Ê†πÊçÆÊÅ¢Â§çÁ≥ªÊï∞ÔºàÁ¢∞Êíû‰πãÂêéÁöÑÂèçÂºπÁ®ãÂ∫¶ÔºâÂíåÊë©Êì¶Á≥ªÊï∞ÔºàÁ¢∞Êíû‰πãÂêéÁöÑÊë©Ê™´ÂäõÂ§ßÂ∞èÔºâËÆ°ÁÆóÁ¢∞Êíû‰πãÂêéÁöÑÈÄüÂ∫¶
+			vin = vi.dot(ni) * ni;//∑®œÚ¡ø
+			vit = vi - vin;//«–œÚ¡ø
+			vi = -(m_restitution_coefficient)*vin + (1 - m_friction_coefficient) * vit;
+			//∏˘æ›ª÷∏¥œµ ˝£®≈ˆ◊≤÷Æ∫Ûµƒ∑¥µØ≥Ã∂»£©∫Õƒ¶≤¡œµ ˝£®≈ˆ◊≤÷Æ∫Ûµƒƒ¶Èﬂ¡¶¥Û–°£©º∆À„≈ˆ◊≤÷Æ∫ÛµƒÀŸ∂»
 			x.block_vector(i) = xi;
 			v.block_vector(i) = vi;
 		}
@@ -1763,14 +1817,14 @@ void Simulation::integrateImplicitMethod()
 	VectorX x = m_y;
 	VectorX x_n = m_y;
 	//VectorX x = m_mesh->m_current_positions;
-	
+
 	// init method specific constants
 	// for l-bfgs only
 	if (m_lbfgs_restart_every_frame == true)
 	{
 		m_lbfgs_need_update_H0 = true;
 	}
-	EigenMatrixx3 x_nx3(x.size()/3, 3);
+	EigenMatrixx3 x_nx3(x.size() / 3, 3);
 	ScalarType p = evaluatePotentialEnergy(x);
 	ScalarType total_time = 1e-5;
 
@@ -1819,20 +1873,20 @@ void Simulation::integrateImplicitMethod()
 		ScalarType gradient_norm = gradient.norm();
 		g_debugger->SendData(x, energy, gradient_norm, 0, total_time);
 
-		
+
 		m_double1x1_time[0] = total_time;
 		m_double1x1_energy[0] = energy;
 
-	/*	std::ofstream outFile_e(filePath_e, std::ios::out | std::ios::app);
-		
-		if (!outFile_e.is_open() ) {
-			std::cerr << "Failed to open file for writing." << std::endl;
-		}*/
+		/*	std::ofstream outFile_e(filePath_e, std::ios::out | std::ios::app);
 
-		//ScalarType error = (x - x_n).lpNorm<Eigen::Infinity>();;
+			if (!outFile_e.is_open() ) {
+				std::cerr << "Failed to open file for writing." << std::endl;
+			}*/
 
-		/*outFile_e << energy << std::endl;
-		outFile_e.close();*/
+			//ScalarType error = (x - x_n).lpNorm<Eigen::Infinity>();;
+
+			/*outFile_e << energy << std::endl;
+			outFile_e.close();*/
 
 #endif // ENABLE_MATLAB_DEBUGGING
 	}
@@ -1862,6 +1916,7 @@ void Simulation::integrateImplicitMethod()
 			if (use_cs)
 			{
 				converge = performNCG_CS(x, beta, gradient_dir, descent_dir);
+				std::cout << "use_cs" << std::endl;
 			}
 			else
 			{
@@ -1902,7 +1957,7 @@ void Simulation::integrateImplicitMethod()
 			ScalarType gradient_norm = gradient.norm();
 			total_time += g_integration_timer.DurationInSeconds();
 			g_debugger->SendData(x, energy, gradient_norm, m_current_iteration + 1, total_time);
-			m_double1x1_time[m_current_iteration+1] = total_time;
+			m_double1x1_time[m_current_iteration + 1] = total_time;
 			m_double1x1_energy[m_current_iteration + 1] = energy;
 #endif  ENABLE_MATLAB_DEBUGGING
 
@@ -1945,20 +2000,20 @@ void Simulation::integrateImplicitMethod()
 	//ScalarType error = (x - x_n).lpNorm<Eigen::Infinity>();;
 
 
-	for (int i = 0; i < m_current_iteration+1; ++i) {
+	for (int i = 0; i < m_current_iteration + 1; ++i) {
 		outFile_e << m_double1x1_energy[i] << std::endl;
 		outFile_t << m_double1x1_time[i] << std::endl;
 	}
-	
+
 	outFile_e.close();
 	outFile_t.close();
 
-	if (m_processing_collision)//ÊúÄÂêéËøõË°åÁ¢∞ÊíûÊ£ÄÊµãÔºåÁ°Æ‰øùÁâ©‰ΩìÂú®Ê®°ÊãüËøáÁ®ãÂΩì‰∏≠‰∏ç‰ºöÂèëÁîü‰∏çÂêàÁêÜÁöÑÁªìÊûú
+	if (m_processing_collision)//◊Ó∫ÛΩ¯––≈ˆ◊≤ºÏ≤‚£¨»∑±£ŒÔÃÂ‘⁄ƒ£ƒ‚π˝≥Ãµ±÷–≤ªª·∑¢…˙≤ª∫œ¿ÌµƒΩ·π˚
 	{
 		VectorX penetration = collisionDetectionPostProcessing(m_mesh->m_current_positions);
 		collisionResolution(penetration, m_mesh->m_current_positions, m_mesh->m_current_velocities);
 	}
-	
+
 }
 
 
@@ -2038,7 +2093,7 @@ bool Simulation::performncg(VectorX& x)
 
 bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir)
 {
-	const char* computeShaderSource = {};
+	//const char* computeShaderSource = {};
 
 	VectorX LBFGS_Pk;
 
@@ -2060,13 +2115,25 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 	m_lbfgs_last_gradient = gradient_dir;
 
 
-	VectorX descent_dir = LBFGS_Pk;
+	descent_dir = LBFGS_Pk;
 
 	descent_dir = LBFGS_Pk + beta * descent_dir;
 
 	ScalarType alpha_k = lineSearch(x, gradient_dir, descent_dir);
 
 	x = x + descent_dir * alpha_k;
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
+		m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW); 
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID); 
+	glBufferData(GL_SHADER_STORAGE_BUFFER,
+		m_mesh->m_vertices_number*3 * sizeof(ScalarType), gradient_dir.data(), GL_DYNAMIC_DRAW);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
@@ -2077,16 +2144,13 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 	VectorX gradient_dir_tmp = gradient_dir;
 
 
-	glDispatchCompute(10, 10, 1);
+	GLint loc_edge_size = glGetUniformLocation(computeProgram, "edge_size");
+	glUniform1ui(loc_edge_size, m_mesh->m_edge_list.size());
+
+	glDispatchCompute((m_mesh->m_edge_list.size() + 9) / 10, 1, 1);
 
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
-
-
-	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
-	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-		m_mesh->m_edge_list.size() * sizeof(Edge),
-		m_mesh->m_edge_list.data());
 
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
@@ -2146,10 +2210,10 @@ bool Simulation::performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir,
 
 	//std::cout << " m_current_iteration  #" << m_current_iteration;;
 
-	
+
 	m_lbfgs_last_x = x;
 	m_lbfgs_last_gradient = gradient_dir;
-	
+
 
 	// assign descent direction
 	//VectorX descent_dir = -m_mesh->m_inv_mass_matrix*gradient;
@@ -2193,7 +2257,7 @@ bool Simulation::performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradien
 
 	VectorX gradient_dir_temp;
 	ScalarType current_energy;
-	
+
 
 
 #ifdef ENABLE_MATLAB_DEBUGGING
@@ -2246,10 +2310,10 @@ bool Simulation::performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradien
 			ScalarType yi_dot_si = y_i_eigen.dot(s_i_eigen);
 			if (yi_dot_si < EPSILON_SQUARE)
 				return true;
-			ScalarType alpha_i = s_i_eigen.dot(LBFGS_Pk)/ yi_dot_si;
+			ScalarType alpha_i = s_i_eigen.dot(LBFGS_Pk) / yi_dot_si;
 			alpha.push_back(alpha_i);
 			LBFGS_Pk -= alpha_i * y_i_eigen;
-			
+
 		}
 
 		if (alpha[0] < EPSILON) // should not be negative
@@ -2257,20 +2321,20 @@ bool Simulation::performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradien
 			alpha[0] = EPSILON;
 		}
 		LBFGS_Pk = alpha[0] * LBFGS_Pk;
-		
+
 
 		for (int i = m_queue_visit_upper_bound - 1; i >= 0; i--) {
 			ncg_lbfgs_queue->visitSandY(&s_i, &y_i, i);
 			Eigen::Map<const VectorX> s_i_eigen(s_i, x.size());
 			Eigen::Map<const VectorX> y_i_eigen(y_i, x.size());
-			ScalarType beta = y_i_eigen.dot( LBFGS_Pk)/ y_i_eigen.dot(s_i_eigen);
+			ScalarType beta = y_i_eigen.dot(LBFGS_Pk) / y_i_eigen.dot(s_i_eigen);
 			LBFGS_Pk += s_i_eigen * (alpha[i] - beta);
 
 		}
 
-		
+
 	}
-	
+
 
 	// assign descent direction
 	//VectorX descent_dir = -m_mesh->m_inv_mass_matrix*gradient;
@@ -2280,7 +2344,7 @@ bool Simulation::performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradien
 	/*if (-descent_dir.dot(gradient_dir) < 0)
 		return false;*/
 
-	// line search
+		// line search
 	ScalarType alpha_k = lineSearch(x, gradient_dir, descent_dir);
 
 
@@ -2292,22 +2356,22 @@ bool Simulation::performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradien
 	evaluateGradient(x, gradient_dir);
 	VectorX g_yk = gradient_dir - gradient_dir_tmp;
 	VectorX x_sk = x - m_lbfgs_last_x;
-	
+
 	beta = gradient_dir.dot(g_yk) / descent_dir.dot(g_yk) - (g_yk.norm() * g_yk.norm() / x_sk.dot(g_yk)) * (gradient_dir.dot(x_sk) / descent_dir.dot(g_yk));
-	
+
 
 	/*if (-descent_dir.dot(gradient_dir) < EPSILON_SQUARE)
 		return true;
 	else
 		return false;*/
 
-	// report convergence
-	/*if (gradient_dir.norm() < EPSILON)
-		return true;
-	else
-		return false;*/
+		// report convergence
+		/*if (gradient_dir.norm() < EPSILON)
+			return true;
+		else
+			return false;*/
 	return false;
-	
+
 }
 
 bool Simulation::integrateLocalGlobalOneIteration(VectorX& x)
@@ -2356,7 +2420,7 @@ bool Simulation::performNewtonsMethodOneIteration(VectorX& x)
 	VectorX descent_dir;
 
 	linearSolve(descent_dir, hessian, gradient);
-	//Á∫øÊÄßÊ±ÇËß£ÈÉ®ÂàÜË∞ÉÁî®Áõ¥Êé•Ê±ÇËß£ÊàñËÄÖËø≠‰ª£CGÊ±ÇËß£
+	//œﬂ–‘«ÛΩ‚≤ø∑÷µ˜”√÷±Ω”«ÛΩ‚ªÚ’ﬂµ¸¥˙CG«ÛΩ‚
 	descent_dir = -descent_dir;
 
 	timer.TocAndReport("solve time", m_verbose_show_converge);
@@ -2516,7 +2580,7 @@ bool Simulation::performLBFGSOneIteration(VectorX& x)
 			}
 			ScalarType rho_i = 1.0 / yi_dot_si;
 			rho.push_back(rho_i);
-			alpha.push_back(rho[i]*m_lbfgs_s_queue[i].dot(q));
+			alpha.push_back(rho[i] * m_lbfgs_s_queue[i].dot(q));
 			q = q - alpha[i] * m_lbfgs_y_queue[i];
 #else
 			// my implementation
@@ -2541,7 +2605,7 @@ bool Simulation::performLBFGSOneIteration(VectorX& x)
 		t_global.Tic();
 		VectorX r;
 		// compute the scaling parameter on the fly
-		ScalarType scaling_parameter = (s_k.transpose()*y_k).trace() / (y_k.transpose()*y_k).trace();
+		ScalarType scaling_parameter = (s_k.transpose() * y_k).trace() / (y_k.transpose() * y_k).trace();
 		if (scaling_parameter < EPSILON) // should not be negative
 		{
 			scaling_parameter = EPSILON;
@@ -2590,7 +2654,7 @@ bool Simulation::performLBFGSOneIteration(VectorX& x)
 	return converged;
 }
 
-void Simulation::LBFGSKernelLinearSolve(VectorX & r, VectorX rhs, ScalarType scaled_identity_constant) // Ar = rhs
+void Simulation::LBFGSKernelLinearSolve(VectorX& r, VectorX rhs, ScalarType scaled_identity_constant) // Ar = rhs
 {
 	r.resize(rhs.size());
 	switch (m_lbfgs_H0_type)
@@ -2602,7 +2666,7 @@ void Simulation::LBFGSKernelLinearSolve(VectorX & r, VectorX rhs, ScalarType sca
 	{
 		// solve the linear system in reduced dimension because of the pattern of the Laplacian matrix
 		// convert to nx3 space
-		EigenMatrixx3 rhs_n3(rhs.size()/3, 3);
+		EigenMatrixx3 rhs_n3(rhs.size() / 3, 3);
 		Vector3mx1ToMatrixmx3(rhs, rhs_n3);
 		// solve using the nxn laplacian
 		EigenMatrixx3 r_n3;
@@ -2653,13 +2717,13 @@ void Simulation::computeConstantVectorsYandZ()
 		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + m_h * m_h * m_mesh->m_inv_mass_matrix * m_external_force;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
-		m_y = (4 * m_mesh->m_current_positions - m_mesh->m_previous_positions) / 3 + (4 * m_mesh->m_current_velocities - m_mesh->m_previous_velocities + 2*m_h*m_mesh->m_inv_mass_matrix*m_external_force) * m_h * 2.0 / 9.0;
+		m_y = (4 * m_mesh->m_current_positions - m_mesh->m_previous_positions) / 3 + (4 * m_mesh->m_current_velocities - m_mesh->m_previous_velocities + 2 * m_h * m_mesh->m_inv_mass_matrix * m_external_force) * m_h * 2.0 / 9.0;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
-		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + 0.5 * m_h * m_h * m_mesh->m_inv_mass_matrix*m_external_force;
+		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + 0.5 * m_h * m_h * m_mesh->m_inv_mass_matrix * m_external_force;
 		break;
 	case INTEGRATION_IMPLICIT_NEWMARK_BETA:
-		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + 0.5 * m_h * m_h * m_mesh->m_inv_mass_matrix*m_external_force;
+		m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + 0.5 * m_h * m_h * m_mesh->m_inv_mass_matrix * m_external_force;
 		evaluateGradientPureConstraint(m_mesh->m_current_positions, m_external_force, m_z);
 		break;
 	default:
@@ -2688,7 +2752,7 @@ void Simulation::updatePosAndVel(const VectorX& new_pos)
 		m_mesh->m_previous_positions = m_mesh->m_current_positions;
 		m_mesh->m_current_positions = new_pos;
 	}
-		break;
+	break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		m_mesh->m_previous_velocities = m_mesh->m_current_velocities;
 		m_mesh->m_previous_positions = m_mesh->m_current_positions;
@@ -2711,7 +2775,7 @@ ScalarType Simulation::evaluateEnergy(const VectorX& x)
 	ScalarType energy_pure_constraints, energy;
 
 	ScalarType inertia_term = 0.5 * (x - m_y).transpose() * m_mesh->m_mass_matrix * (x - m_y);
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
@@ -2720,14 +2784,14 @@ ScalarType Simulation::evaluateEnergy(const VectorX& x)
 		break;
 	case INTEGRATION_IMPLICIT_EULER:
 		energy_pure_constraints = evaluateEnergyPureConstraint(x, m_external_force);
-		energy = inertia_term + h_square*energy_pure_constraints;
+		energy = inertia_term + h_square * energy_pure_constraints;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		energy_pure_constraints = evaluateEnergyPureConstraint(x, m_external_force);
-		energy = inertia_term + h_square*4.0 / 9.0*energy_pure_constraints;
+		energy = inertia_term + h_square * 4.0 / 9.0 * energy_pure_constraints;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
-		energy_pure_constraints = evaluateEnergyPureConstraint((x+m_mesh->m_current_positions)/2, m_external_force);
+		energy_pure_constraints = evaluateEnergyPureConstraint((x + m_mesh->m_current_positions) / 2, m_external_force);
 		energy = inertia_term + h_square * (energy_pure_constraints);
 		break;
 	case INTEGRATION_IMPLICIT_NEWMARK_BETA:
@@ -2741,7 +2805,7 @@ ScalarType Simulation::evaluateEnergy(const VectorX& x)
 
 void Simulation::evaluateGradient(const VectorX& x, VectorX& gradient, bool enable_omp)
 {
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
@@ -2750,11 +2814,11 @@ void Simulation::evaluateGradient(const VectorX& x, VectorX& gradient, bool enab
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
 		evaluateGradientPureConstraint(x, m_external_force, gradient);
-		gradient = m_mesh->m_mass_matrix * (x - m_y) + h_square*gradient;
+		gradient = m_mesh->m_mass_matrix * (x - m_y) + h_square * gradient;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		evaluateGradientPureConstraint(x, m_external_force, gradient);
-		gradient = m_mesh->m_mass_matrix * (x - m_y) + (h_square*4.0 / 9.0)*gradient;
+		gradient = m_mesh->m_mass_matrix * (x - m_y) + (h_square * 4.0 / 9.0) * gradient;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		evaluateGradientPureConstraint((x + m_mesh->m_current_positions) / 2, m_external_force, gradient);
@@ -2769,7 +2833,7 @@ void Simulation::evaluateGradient(const VectorX& x, VectorX& gradient, bool enab
 
 ScalarType Simulation::evaluateEnergyAndGradient(const VectorX& x, VectorX& gradient)
 {
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	ScalarType energy_pure_constraints, energy;
 	ScalarType inertia_term = 0.5 * (x - m_y).transpose() * m_mesh->m_mass_matrix * (x - m_y);
 
@@ -2782,16 +2846,16 @@ ScalarType Simulation::evaluateEnergyAndGradient(const VectorX& x, VectorX& grad
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
 		energy_pure_constraints = evaluateEnergyAndGradientPureConstraint(x, m_external_force, gradient);
-		energy = inertia_term + h_square*energy_pure_constraints;
-		gradient = m_mesh->m_mass_matrix * (x - m_y) + h_square*gradient;
+		energy = inertia_term + h_square * energy_pure_constraints;
+		gradient = m_mesh->m_mass_matrix * (x - m_y) + h_square * gradient;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		energy_pure_constraints = evaluateEnergyAndGradientPureConstraint(x, m_external_force, gradient);
-		energy = inertia_term + h_square*4.0 / 9.0*energy_pure_constraints;
-		gradient = m_mesh->m_mass_matrix * (x - m_y) + (h_square*4.0 / 9.0)*gradient;
+		energy = inertia_term + h_square * 4.0 / 9.0 * energy_pure_constraints;
+		gradient = m_mesh->m_mass_matrix * (x - m_y) + (h_square * 4.0 / 9.0) * gradient;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
-		energy_pure_constraints = evaluateEnergyAndGradientPureConstraint((x + m_mesh->m_current_positions)/2, m_external_force, gradient);
+		energy_pure_constraints = evaluateEnergyAndGradientPureConstraint((x + m_mesh->m_current_positions) / 2, m_external_force, gradient);
 		energy = inertia_term + h_square * (energy_pure_constraints);
 		gradient = m_mesh->m_mass_matrix * (x - m_y) + h_square / 2 * (gradient);
 		break;
@@ -2807,7 +2871,7 @@ ScalarType Simulation::evaluateEnergyAndGradient(const VectorX& x, VectorX& grad
 
 void Simulation::evaluateHessian(const VectorX& x, SparseMatrix& hessian_matrix)
 {
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
@@ -2815,11 +2879,11 @@ void Simulation::evaluateHessian(const VectorX& x, SparseMatrix& hessian_matrix)
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
 		evaluateHessianPureConstraint(x, hessian_matrix);
-		hessian_matrix = m_mesh->m_mass_matrix + h_square*hessian_matrix;
+		hessian_matrix = m_mesh->m_mass_matrix + h_square * hessian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		evaluateHessianPureConstraint(x, hessian_matrix);
-		hessian_matrix = m_mesh->m_mass_matrix + h_square*4.0 / 9.0*hessian_matrix;
+		hessian_matrix = m_mesh->m_mass_matrix + h_square * 4.0 / 9.0 * hessian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		evaluateHessianPureConstraint((x + m_mesh->m_current_positions) / 2, hessian_matrix);
@@ -2834,7 +2898,7 @@ void Simulation::evaluateHessian(const VectorX& x, SparseMatrix& hessian_matrix)
 
 void Simulation::evaluateHessianSmart(const VectorX& x, SparseMatrix& hessian_matrix)
 {
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
@@ -2842,11 +2906,11 @@ void Simulation::evaluateHessianSmart(const VectorX& x, SparseMatrix& hessian_ma
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
 		evaluateHessianPureConstraintSmart(x, hessian_matrix);
-		hessian_matrix = m_mesh->m_mass_matrix + h_square*hessian_matrix;
+		hessian_matrix = m_mesh->m_mass_matrix + h_square * hessian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		evaluateHessianPureConstraintSmart(x, hessian_matrix);
-		hessian_matrix = m_mesh->m_mass_matrix + h_square*4.0 / 9.0*hessian_matrix;
+		hessian_matrix = m_mesh->m_mass_matrix + h_square * 4.0 / 9.0 * hessian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		evaluateHessianPureConstraintSmart((x + m_mesh->m_current_positions) / 2, hessian_matrix);
@@ -2910,9 +2974,9 @@ void Simulation::evaluateHessianForCG(const VectorX& x)
 	}
 }
 // apply hessian
-void Simulation::applyHessianForCG(const VectorX& x, VectorX & b)
+void Simulation::applyHessianForCG(const VectorX& x, VectorX& b)
 {
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
@@ -2920,11 +2984,11 @@ void Simulation::applyHessianForCG(const VectorX& x, VectorX & b)
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
 		applyHessianForCGPureConstraint(x, b);
-		b = m_mesh->m_mass_matrix * x + h_square*b;
+		b = m_mesh->m_mass_matrix * x + h_square * b;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
 		applyHessianForCGPureConstraint(x, b);
-		b = m_mesh->m_mass_matrix * x + h_square*4.0 / 9.0*b;
+		b = m_mesh->m_mass_matrix * x + h_square * 4.0 / 9.0 * b;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		applyHessianForCGPureConstraint(x, b);
@@ -2932,7 +2996,7 @@ void Simulation::applyHessianForCG(const VectorX& x, VectorX & b)
 		break;
 	case INTEGRATION_IMPLICIT_NEWMARK_BETA:
 		applyHessianForCGPureConstraint(x, b);
-		b = m_mesh->m_mass_matrix * x + h_square/4*b;
+		b = m_mesh->m_mass_matrix * x + h_square / 4 * b;
 		break;
 	}
 
@@ -2946,16 +3010,16 @@ void Simulation::evaluateLaplacian(SparseMatrix& laplacian_matrix)
 	g_debugger->SendSparseMatrix(m_weighted_laplacian, "L");
 #endif
 
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
-		laplacian_matrix = m_mesh->m_mass_matrix + h_square*laplacian_matrix;
+		laplacian_matrix = m_mesh->m_mass_matrix + h_square * laplacian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
-		laplacian_matrix = m_mesh->m_mass_matrix + h_square*4.0 / 9.0*laplacian_matrix;
+		laplacian_matrix = m_mesh->m_mass_matrix + h_square * 4.0 / 9.0 * laplacian_matrix;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		laplacian_matrix = m_mesh->m_mass_matrix + h_square / 4 * laplacian_matrix;
@@ -2971,20 +3035,20 @@ void Simulation::evaluateLaplacian(SparseMatrix& laplacian_matrix)
 
 }
 
-void Simulation::evaluateLaplacian1D(SparseMatrix & laplacian_matrix_1d)
+void Simulation::evaluateLaplacian1D(SparseMatrix& laplacian_matrix_1d)
 {
 	evaluateLaplacianPureConstraint1D(laplacian_matrix_1d);
 
-	ScalarType h_square = m_h*m_h;
+	ScalarType h_square = m_h * m_h;
 	switch (m_integration_method)
 	{
 	case INTEGRATION_QUASI_STATICS:
 		break;//DO NOTHING
 	case INTEGRATION_IMPLICIT_EULER:
-		laplacian_matrix_1d = m_mesh->m_mass_matrix_1d + h_square*laplacian_matrix_1d;
+		laplacian_matrix_1d = m_mesh->m_mass_matrix_1d + h_square * laplacian_matrix_1d;
 		break;
 	case INTEGRATION_IMPLICIT_BDF2:
-		laplacian_matrix_1d = m_mesh->m_mass_matrix_1d + h_square*4.0 / 9.0*laplacian_matrix_1d;
+		laplacian_matrix_1d = m_mesh->m_mass_matrix_1d + h_square * 4.0 / 9.0 * laplacian_matrix_1d;
 		break;
 	case INTEGRATION_IMPLICIT_MIDPOINT:
 		laplacian_matrix_1d = m_mesh->m_mass_matrix_1d + h_square / 4 * laplacian_matrix_1d;
@@ -3124,7 +3188,7 @@ void Simulation::Evaluatespringlength(const VectorX& x)
 	outFile_e << length << std::endl;
 	outFile_e.close();
 
-	
+
 }
 
 void Simulation::evaluateGradientPureConstraint(const VectorX& x, const VectorX& f_ext, VectorX& gradient)
@@ -3275,7 +3339,7 @@ void Simulation::evaluateLaplacianPureConstraint(SparseMatrix& laplacian_matrix)
 	laplacian_matrix.setFromTriplets(l_triplets.begin(), l_triplets.end());
 }
 
-void Simulation::evaluateLaplacianPureConstraint1D(SparseMatrix & laplacian_matrix_1d)
+void Simulation::evaluateLaplacianPureConstraint1D(SparseMatrix& laplacian_matrix_1d)
 {
 	laplacian_matrix_1d.resize(m_mesh->m_vertices_number, m_mesh->m_vertices_number);
 	std::vector<SparseMatrixTriplet> l_1d_triplets;
@@ -3417,8 +3481,8 @@ void Simulation::evaluateHessianCollision(const VectorX& x, SparseMatrix& hessia
 
 ScalarType Simulation::lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
 {
-	
-	
+
+
 	if (m_enable_line_search)
 	{
 		VectorX x_plus_tdx(m_mesh->m_system_dimension);
@@ -3432,7 +3496,7 @@ ScalarType Simulation::lineSearch(const VectorX& x, const VectorX& gradient_dir,
 		try
 		{
 			currentObjectiveValue = evaluateEnergy(x);
-			
+
 		}
 		catch (const std::exception& e)
 		{
@@ -3444,7 +3508,7 @@ ScalarType Simulation::lineSearch(const VectorX& x, const VectorX& gradient_dir,
 			g_total_ls_iterations++;
 #endif
 			t *= m_ls_beta;
-			x_plus_tdx = x + t*descent_dir;
+			x_plus_tdx = x + t * descent_dir;
 
 			lhs = 1e15;
 			rhs = 0;
@@ -3616,7 +3680,7 @@ ScalarType Simulation::linesearchWithPrefetchedEnergyAndGradientComputing(const 
 #endif
 
 			t *= m_ls_beta;
-			x_plus_tdx = x + t*descent_dir;
+			x_plus_tdx = x + t * descent_dir;
 
 			lhs = 1e15;
 			rhs = 0;
@@ -3682,7 +3746,7 @@ ScalarType Simulation::evaluatePotentialEnergy(const VectorX& x)
 }
 ScalarType Simulation::evaluateKineticEnergy(const VectorX& v)
 {
-	return (0.5*v.transpose()*m_mesh->m_mass_matrix*v);
+	return (0.5 * v.transpose() * m_mesh->m_mass_matrix * v);
 }
 ScalarType Simulation::evaluateTotalEnergy(const VectorX& x, const VectorX& v)
 {
@@ -3847,12 +3911,12 @@ void Simulation::factorizeNewtonSolver(const SparseMatrix& A, char* warning_msg)
 			EigenMakeSparseIdentityMatrix(A.rows(), A.cols(), I);
 		}
 		Regularization *= 10;
-		A_prime = A_prime + Regularization*I;
+		A_prime = A_prime + Regularization * I;
 		m_newton_solver.factorize(A_prime);
 		success = false;
 	}
 	if (!success && m_verbose_show_factorization_warning)
-		std::cout << "Warning: " << warning_msg <<  " adding "<< Regularization <<" identites.(llt solver)" << std::endl;
+		std::cout << "Warning: " << warning_msg << " adding " << Regularization << " identites.(llt solver)" << std::endl;
 }
 #pragma endregion
 
@@ -3874,14 +3938,14 @@ ScalarType Simulation::linearSolve(VectorX& x, const SparseMatrix& A, const Vect
 		factorizeDirectSolverLLT(A, A_solver, msg);
 		x = A_solver.solve(b);
 	}
-		break;
+	break;
 	case SOLVER_TYPE_CG:
 	{
 		x.resize(b.size());
 		x.setZero();
 		residual = conjugateGradientWithInitialGuess(x, A, b, m_iterative_solver_max_iteration);
 	}
-		break;
+	break;
 	default:
 		break;
 	}
@@ -3891,7 +3955,7 @@ ScalarType Simulation::linearSolve(VectorX& x, const SparseMatrix& A, const Vect
 
 ScalarType Simulation::conjugateGradientWithInitialGuess(VectorX& x, const SparseMatrix& A, const VectorX& b, const unsigned int max_it /* = 200 */, const ScalarType tol /* = 1e-5 */)
 {
-	VectorX r = b - A*x;
+	VectorX r = b - A * x;
 	VectorX p = r;
 	ScalarType rsold = r.dot(r);
 	ScalarType rsnew;
@@ -3902,23 +3966,23 @@ ScalarType Simulation::conjugateGradientWithInitialGuess(VectorX& x, const Spars
 
 	for (unsigned int i = 1; i != max_it; ++i)
 	{
-		Ap = A*p;
+		Ap = A * p;
 		alpha = rsold / p.dot(Ap);
 		x = x + alpha * p;
 
-		r = r - alpha*Ap;
+		r = r - alpha * Ap;
 		rsnew = r.dot(r);
 		if (sqrt(rsnew) < tol)
 		{
 			break;
 		}
-		p = r + (rsnew / rsold)*p;
+		p = r + (rsnew / rsold) * p;
 		rsold = rsnew;
 	}
 
 	return sqrt(rsnew);
 }
-//Cholesky ÂàÜËß£
+//Cholesky ∑÷Ω‚
 void Simulation::factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper>& lltSolver, char* warning_msg)
 {
 	SparseMatrix A_prime = A;
@@ -3934,12 +3998,12 @@ void Simulation::factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::Simplici
 			EigenMakeSparseIdentityMatrix(A.rows(), A.cols(), I);
 		}
 		Regularization *= 10;
-		A_prime = A_prime + Regularization*I;
+		A_prime = A_prime + Regularization * I;
 		lltSolver.factorize(A_prime);
 		success = false;
 	}
 	if (!success && m_verbose_show_factorization_warning)
-		std::cout << "Warning: " << warning_msg <<  " adding "<< Regularization <<" identites.(llt solver)" << std::endl;
+		std::cout << "Warning: " << warning_msg << " adding " << Regularization << " identites.(llt solver)" << std::endl;
 }
 
 #ifdef PARDISO_SUPPORT
@@ -3958,7 +4022,7 @@ void Simulation::factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::PardisoL
 			EigenMakeSparseIdentityMatrix(A.rows(), A.cols(), I);
 		}
 		Regularization *= 10;
-		A_prime = A_prime + Regularization*I;
+		A_prime = A_prime + Regularization * I;
 		lltSolver.factorize(A_prime);
 		success = false;
 	}

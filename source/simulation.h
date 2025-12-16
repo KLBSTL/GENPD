@@ -181,19 +181,19 @@ public:
 	void DeleteVisualizationMesh();
 	void ResetVisualizationMesh();
 	void SetVisualizationMesh();
-	inline Mesh* GetEigenVectorVisMesh(){ return m_eigenvector_vis_mesh; }
+	inline Mesh* GetEigenVectorVisMesh() { return m_eigenvector_vis_mesh; }
 	void ResetVisualizationMeshHeight();
 
 	// inline functions
-	inline void SetReprefactorFlag() 
+	inline void SetReprefactorFlag()
 	{
 		m_precomputing_flag = false;
 		m_prefactorization_flag = false;
 		m_prefactorization_flag_newton = false;
 	}
-	inline void SetMesh(Mesh* mesh) {m_mesh = mesh;}
-	inline void SetScene(Scene* scene) {m_scene = scene;}
-	inline void SetStepMode(bool step_mode) {m_step_mode = step_mode;}
+	inline void SetMesh(Mesh* mesh) { m_mesh = mesh; }
+	inline void SetScene(Scene* scene) { m_scene = scene; }
+	inline void SetStepMode(bool step_mode) { m_step_mode = step_mode; }
 	inline ScalarType Timestep() { return m_h; }
 
 protected:
@@ -225,10 +225,10 @@ protected:
 	OptimizationMethod m_optimization_method;
 
 	// key simulation components: mesh and scene
-	Mesh *m_mesh;
-	Scene *m_scene;
+	Mesh* m_mesh;
+	Scene* m_scene;
 	// for other visualizations
-	Mesh *m_eigenvector_vis_mesh = NULL;
+	Mesh* m_eigenvector_vis_mesh = NULL;
 	// key simulation components: constraints
 	std::vector<Constraint*> m_constraints;
 	//std::vector<Constraint*>::iterator m_attachment_constraint_start_point;
@@ -367,12 +367,12 @@ protected:
 	bool use_cs;
 	GLuint computeShader;
 	GLuint computeProgram;
-	GLuint edgeID, gradientID,xID;
+	GLuint edgeID, gradientID, xID;
 
 	VectorX gradient_dir;
-	
-	
-	
+
+
+
 
 
 private:
@@ -383,7 +383,7 @@ private:
 	void dampVelocity(); // damp velocity at the end of each iteration.
 	void calculateExternalForce(); // wind force is propotional to the area of triangles projected on the tangential plane
 	VectorX collisionDetectionPostProcessing(const VectorX& x); // detect collision and return a vector of penetration
-	void collisionDetection(const VectorX& x); 
+	void collisionDetection(const VectorX& x);
 	void collisionResolution(const VectorX& penetration, VectorX& x, VectorX& v);
 
 	void integrateImplicitMethod();
@@ -419,7 +419,7 @@ private:
 	// evaluate hessian
 	void evaluateHessianForCG(const VectorX& x);
 	// apply hessian
-	void applyHessianForCG(const VectorX& x, VectorX & b);
+	void applyHessianForCG(const VectorX& x, VectorX& b);
 	// evaluate Weighted Laplacian Matrix
 	void evaluateLaplacian(SparseMatrix& laplacian_matrix);
 	// evaluate Weighted Laplacian Matrix nxn
@@ -432,7 +432,7 @@ private:
 	// testing
 	// print volume of the elements
 	void printVolumeTesting(const VectorX& x);
-	
+
 	// energy conservation
 	ScalarType evaluatePotentialEnergy(const VectorX& x);
 	ScalarType evaluateKineticEnergy(const VectorX& v);
@@ -458,14 +458,14 @@ private:
 	ScalarType lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType linesearchWithPrefetchedEnergyAndGradientComputing(const VectorX& x, const ScalarType current_energy, const VectorX& gradient_dir, const VectorX& descent_dir, ScalarType& next_energy, VectorX& next_gradient_dir);
 	ScalarType lineSearch_ncg(const VectorX& x, const  VectorX& gradient_dir, VectorX& descent_dir, const SparseMatrix& Hessian);
-	
+
 	// matrices and prefactorizations
 	void precomputeLaplacianWeights();
 	void precomputeLaplacian();
 	void setWeightedLaplacianMatrix();
 	void setWeightedLaplacianMatrix1D();
 	void prefactorize();
-	
+
 	void setJMatrix();
 	void setWeightedLaplacianMatrix_1();
 	void prefactorize(PrefactorType type);

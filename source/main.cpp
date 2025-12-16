@@ -847,7 +847,6 @@ void TW_CALL reset_simulation(void*)
 
     g_simulation->Reset();
 
-
 	// reset selection
 	g_selection_tool->Reset();
 	
