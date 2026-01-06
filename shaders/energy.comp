@@ -1,0 +1,56 @@
+#version 430
+
+layout( local_size_x = 256 ) in;
+
+uniform float rest_length;
+
+uniform uint edge_size;
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 3) buffer Data {
+    float energy;
+};
+
+
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < edge_size){
+        Edge e = edges[idx];
+
+        // 获取顶点索引
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+
+        vec3 x_ij = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
+        //        vec3 g_ij = stiffness * (length(x_ij) - m_rest_length) * normalize(x_ij);
+
+//        vec3 g_ij = 3000 * (length(x_ij) * 0.1) * normalize(x_ij);
+
+        ld_ij = length(x_ij) - rest_length;
+
+        e_ij = 0.5 * 3000 * ld_ij * ld_ij;
+
+
+        energe += e_ij;
+    }
+
+}

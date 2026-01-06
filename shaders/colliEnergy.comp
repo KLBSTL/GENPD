@@ -1,0 +1,98 @@
+#version 430
+
+layout( local_size_x = 256 ) in;
+
+uniform float rest_length;
+
+uniform uint edge_size;
+uniform uint fixed_edge_size;
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 3) buffer Data {
+    float energy;
+};
+
+layout(std430, binding = 4) buffer FixedEdgeBuffer {
+    Edge fixededges[];
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < fiixed_edge_size){
+        Edge e = fixededges[idx];
+
+        // 获取顶点索引
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+
+        vec3 e_i = 0.5 * 3000 * vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
+
+        energe += e_i;
+    }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*glGenBuffers(1, &edgeID);
+glGenBuffers(1, &gradientID);
+glGenBuffers(1, &xID);
+glGenBuffers(1, &energyID);
+glGenBuffers(1, &fixededgesID);
+glGenBuffers(1, &FlagID);
+glGenBuffers(1, &ResultID);
+glGenBuffers(1, &DescentID);
+glGenBuffers(1, &m_yID);*/
+
+
+//case INTEGRATION_IMPLICIT_EULER:
+//m_y = m_mesh->m_current_positions + m_mesh->m_current_velocities * m_h + m_h * m_h * m_mesh->m_inv_mass_matrix * m_external_force;
+//break;
+
+/*glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+glBufferData(GL_SHADER_STORAGE_BUFFER, gradient_dir.size() * sizeof(float),
+	gradient_dir.data(), GL_DYNAMIC_DRAW);
+
+glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+
+glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);*/
+
+
+
+
+
+
+
+
+
+
+
+

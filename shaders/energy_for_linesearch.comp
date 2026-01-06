@@ -1,0 +1,69 @@
+#version 430
+
+layout( local_size_x = 256 ) in;
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+layout(std430, binding = 3) buffer Data {
+    float energy[K];
+};
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+
+uniform int system_dim;
+uniform float t0;
+uniform float beta;
+uniform int K;
+
+uniform uint edge_size;
+
+shared float energy_shared;
+
+
+float compute_energy_contribution(uint cidx) {
+    uint i = edges[cidx].p0;
+    uint j = edges[cidx].p1;
+
+    vec3 xi = vec3(
+        x_pos[i*3 + 0] + t*d[i*3 + 0],
+        x_pos[i*3 + 1] + t*d[i*3 + 1],
+        x_pos[i*3 + 2] + t*d[i*3 + 2]
+    );
+    vec3 xj = vec3(
+        x_pos[j*3 + 0] + t*d[j*3 + 0],
+        x_pos[j*3 + 1] + t*d[j*3 + 1],
+        x_pos[j*3 + 2] + t*d[j*3 + 2]
+    );
+
+    return 0.5 * k * length(xi - xj) ^ 2;
+}
+
+void main() {
+    uint i = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    float t = t0 * pow(beta, float(i));
+
+    // 并行计算 E(x + t d)
+    float local_sum = 0.0;
+    for (uint idx = tid; idx < edge_size ; idx += gl_WorkGroupSize.x) {
+        local_sum += compute_energy_contribution(idx);
+    }
+
+    local_sum = reduce(local_sum);
+
+    if (tid == 0) {
+        energy[i] = local_sum;
+    }
+}

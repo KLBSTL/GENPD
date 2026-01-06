@@ -1,0 +1,29 @@
+
+#version 430
+
+
+layout(local_size_x = 1) in;
+
+uniform float currentEnergy;
+uniform float alpha;
+uniform float grad_dot_d;
+
+
+layout(std430, binding = 3) buffer Data {
+    float energy[K];
+};
+
+layout(std430,binding = 5) buffer Flags {
+    int valid[K];
+};
+
+
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+
+    float t = t0 * pow(beta, float(i));
+    float rhs = currentEnergy + alpha * t * grad_dot_d;
+
+    valid[i] = (energy[i] < rhs) ? 1 : 0;
+}
