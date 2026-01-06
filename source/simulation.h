@@ -367,15 +367,21 @@ protected:
 	// use compute shader
 	bool use_cs;
 	GLuint gradient_shader,energy_shader,
-		energy_for_linesearch_shader,colliEnergy_shader,choose_valid_shader,choose_final_shader;
+		energy_for_linesearch_shader,colliEnergy_shader,choose_valid_shader,choose_final_shader,compute_shader;
 
 	GLuint gradient_program, energy_program,
-		energy_for_linesearch_program, colliEnergy_program, choose_valid_program, choose_final_program;
+		energy_for_linesearch_program, colliEnergy_program, choose_valid_program, choose_final_program, compute_program;
 
-	GLuint edgeID, gradientID, xID,energyID,fixededgesID,FlagID,ResultID,DesentID;
+	GLuint edgeID, gradientID, xID,energyID,fixededgesID,FlagID,ResultID,DescentID, m_yID;
 
-	char* gradient_source = {}, energy_source = {}, energy_for_linesearch_source = {}
-	, colliEnergy_source = {}, choose_valid_source = {}, choose_final_source = {};
+	const char* gradient_source = R"()", *energy_source = R"()", *energy_for_linesearch_source = R"()"
+	, *colliEnergy_source = R"()", *choose_valid_source = R"()", *choose_final_source = R"()", *compute_source= R"()";
+
+
+	ScalarType energy[8];
+	ScalarType valid[8];
+	int *Result;
+	int* fixedsize;
 
 
 
@@ -408,6 +414,7 @@ private:
 	bool performLBFGSOneIteration(VectorX& x);// our method
 	bool performncg(VectorX& x);
 	bool performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
+	bool performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	void set_source();
 	void set_shader();
 	void Create_SSBO();

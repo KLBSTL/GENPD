@@ -123,53 +123,230 @@ Simulation::Simulation()
 	if (use_cs)
 	{
 		
-		computeShader = glCreateShader(GL_COMPUTE_SHADER);
-		glShaderSource(computeShader, 1, &gradient_s, NULL);
-		glCompileShader(computeShader);
+		set_shader();
 
-
-
-
-		GLint success = 0;
-		glGetShaderiv(computeShader, GL_COMPILE_STATUS, &success);
-		if (!success) {
-			char infoLog[512];
-			glGetShaderInfoLog(computeShader, 512, NULL, infoLog);
-			std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
-		}
-
-		computeProgram = glCreateProgram();
-		glAttachShader(computeProgram, computeShader);
-		glLinkProgram(computeProgram);
-
-
-		glGetProgramiv(computeProgram, GL_LINK_STATUS, &success);
-		if (!success) {
-			char infoLog[512];
-			glGetProgramInfoLog(computeProgram, 512, NULL, infoLog);
-			std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
-		}
-
-		glUseProgram(computeProgram);
+		glUseProgram(compute_program);
 
 		glGenBuffers(1, &edgeID);
 		glGenBuffers(1, &gradientID);
 		glGenBuffers(1, &xID);
+		glGenBuffers(1, &energyID);
+		glGenBuffers(1, &fixededgesID);
+		glGenBuffers(1, &FlagID);
+		glGenBuffers(1, &ResultID);
+		glGenBuffers(1, &DescentID);
+		glGenBuffers(1, &m_yID);
 
 	}
 }
 
 void Simulation::set_source()
-{
+{/*
 	gradient_source = {}, energy_source = {}, energy_for_linesearch_source = {}
-	, colliEnerge_source = {}, choose_valid_source = {}, choose_final_source = {};
+	, colliEnergy_source = {}, choose_valid_source = {}, choose_final_source = {};*/
 
 }
 
 void Simulation::set_shader()
 {
-	gradient_shader, energy_shader,
-		energy_for_linesearch_shader, colliEnergy_shader, choose_valid_shader, choose_final_shader;
+
+	gradient_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(gradient_shader, 1, &gradient_source, NULL);
+	glCompileShader(gradient_shader);
+
+	energy_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(energy_shader, 1, &energy_source, NULL);
+	glCompileShader(energy_shader);
+
+	energy_for_linesearch_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(energy_for_linesearch_shader, 1, &energy_for_linesearch_source, NULL);
+	glCompileShader(energy_for_linesearch_shader);
+
+	colliEnergy_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(colliEnergy_shader, 1, &colliEnergy_source, NULL);
+	glCompileShader(colliEnergy_shader);
+
+	choose_valid_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(choose_valid_shader, 1, &choose_valid_source, NULL);
+	glCompileShader(choose_valid_shader);
+
+	choose_final_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(choose_final_shader, 1, &choose_final_source, NULL);
+	glCompileShader(choose_final_shader);
+
+	compute_shader = glCreateShader(GL_COMPUTE_SHADER);
+	glShaderSource(compute_shader, 1, &compute_source, NULL);
+	glCompileShader(compute_shader);
+
+
+	
+
+
+	//  gradient_shader, energy_shader,
+	//	energy_for_linesearch_shader, colliEnergy_shader, choose_valid_shader, choose_final_shader;
+
+
+	GLint success = 0;
+	glGetShaderiv(gradient_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(gradient_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	gradient_program = glCreateProgram();
+	glAttachShader(gradient_program, gradient_shader);
+	glLinkProgram(gradient_program);
+
+
+	glGetProgramiv(gradient_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(gradient_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+
+
+
+	glGetShaderiv(energy_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(energy_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	energy_program = glCreateProgram();
+	glAttachShader(energy_program, energy_shader);
+	glLinkProgram(energy_program);
+
+
+	glGetProgramiv(energy_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(energy_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+
+
+
+
+	glGetShaderiv(energy_for_linesearch_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(energy_for_linesearch_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	energy_for_linesearch_program = glCreateProgram();
+	glAttachShader(energy_for_linesearch_program, energy_for_linesearch_shader);
+	glLinkProgram(energy_for_linesearch_program);
+
+
+	glGetProgramiv(energy_for_linesearch_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(energy_for_linesearch_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+
+
+
+	glGetShaderiv(colliEnergy_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(colliEnergy_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	colliEnergy_program = glCreateProgram();
+	glAttachShader(colliEnergy_program, colliEnergy_shader);
+	glLinkProgram(colliEnergy_program);
+
+
+	glGetProgramiv(colliEnergy_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(colliEnergy_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+
+
+
+	glGetShaderiv(choose_valid_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(choose_valid_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	choose_valid_program = glCreateProgram();
+	glAttachShader(choose_valid_program, choose_valid_shader);
+	glLinkProgram(choose_valid_program);
+
+
+	glGetProgramiv(choose_valid_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(choose_valid_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+
+
+
+	glGetShaderiv(choose_final_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(choose_final_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	choose_final_program = glCreateProgram();
+	glAttachShader(choose_final_program, choose_final_shader);
+	glLinkProgram(choose_final_program);
+
+
+	glGetProgramiv(choose_final_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(choose_final_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
+
+
+
+	glGetShaderiv(compute_shader, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetShaderInfoLog(compute_shader, 512, NULL, infoLog);
+		std::cerr << "Compute shader compilation failed:\n" << infoLog << std::endl;
+	}
+
+	compute_program = glCreateProgram();
+	glAttachShader(compute_program, compute_shader);
+	glLinkProgram(compute_program);
+
+
+	glGetProgramiv(compute_program, GL_LINK_STATUS, &success);
+	if (!success) {
+		char infoLog[512];
+		glGetProgramInfoLog(compute_program, 512, NULL, infoLog);
+		std::cerr << "Compute shader program linking failed:\n" << infoLog << std::endl;
+	}
 
 }
 
@@ -228,13 +405,32 @@ void Simulation::Reset()
 		gradient_dir.resize(m_mesh->m_system_dimension);
 		gradient_dir.setZero();
 
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
-		glBufferData(GL_SHADER_STORAGE_BUFFER, gradient_dir.size() * sizeof(float),
-			gradient_dir.data(), GL_DYNAMIC_DRAW);
 
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, 8 * sizeof(ScalarType),
+			energy, GL_DYNAMIC_DRAW);
 
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, FlagID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, 8 * sizeof(ScalarType),
+			valid, GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, FlagID);
+
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, ResultID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(int),
+			Result, GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, ResultID);
+
+
+
+		fixedsize = 0;
+
+		
 
 	}
 
@@ -324,7 +520,7 @@ void Simulation::Update()
 		// damping
 		dampVelocity();
 	}
-	//¼ÆËã×ÜÐÎ±äÁ¿
+	//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î±ï¿½ï¿½ï¿½
 	//Evaluatespringlength(m_mesh->m_current_positions);
 
 	//// volume
@@ -364,11 +560,11 @@ void Simulation::Update()
 				std::cerr << "Failed to open file for writing." << std::endl;
 			}
 
-			// Ð´ÈëÊý¾Ý
+			// Ð´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			outFile << K_plus_W << std::endl;
 			outFile_1 << K << std::endl;
 			outFile_2 << W << std::endl;
-			// ¹Ø±ÕÎÄ¼þ
+			// ï¿½Ø±ï¿½ï¿½Ä¼ï¿½
 			outFile.close();
 			outFile_1.close();
 			outFile_2.close();
@@ -751,7 +947,7 @@ void Simulation::RotateHandleToValue()
 		m_handles[m_selected_handle_id].RotateToValue(theta);
 		UpdateHandleInfoToConstraints(m_handles[m_selected_handle_id]);
 	}
-}//handle¾ä±ú£¬ÓÃÀ´±êÊ¶Êý¾ÝµÄ±êÊ¶·û
+}//handleï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¶ï¿½ï¿½ï¿½ÝµÄ±ï¿½Ê¶ï¿½ï¿½
 void Simulation::RotateHandleSetStepSize()
 {
 	if (m_selected_handle_id >= 0)
@@ -1046,7 +1242,7 @@ void Simulation::LoadHandleAnimation(const char* filename)
 				>> rotation_amount \
 				>> end_frame;
 
-			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//¹Ø¼üÖ¡¶¯»­µÄÐÅÏ¢´æ´¢
+			m_keyframe_handle_unit_rotation_axis.push_back(rotation_axis);//ï¿½Ø¼ï¿½Ö¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ï¢ï¿½æ´¢
 			m_keyframe_handle_unit_rotation_degree.push_back(rotation_amount);
 			m_keyframe_handle_unit_rotation_end_frames.push_back(end_frame);
 		}
@@ -1105,7 +1301,7 @@ void Simulation::SaveHandles(const char* filename)
 	}
 }
 
-void Simulation::LoadHandles(const char* filename)//ÎÄ¼þÖÐ¶ÁÈ¡¸½¼ÓÔ¼Êø
+void Simulation::LoadHandles(const char* filename)//ï¿½Ä¼ï¿½ï¿½Ð¶ï¿½È¡ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½
 {
 	// clear current handles and attachment constraints
 	for (int i = m_handles.size() - 1; i >= 0; --i)
@@ -1260,9 +1456,9 @@ void Simulation::SetConvergedEnergy()
 void Simulation::RandomizePoints()
 {
 	VectorX x;
-	generateRandomVector(m_mesh->m_system_dimension, x);//random¿âÉú³ÉËæ»úÏòÁ¿
+	generateRandomVector(m_mesh->m_system_dimension, x);//randomï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
-	m_mesh->m_current_positions = x;// ½«Éú³ÉµÄËæ»úÏòÁ¿¸³Öµ¸øÍø¸ñµÄµ±Ç°Î»ÖÃ
+	m_mesh->m_current_positions = x;// ï¿½ï¿½ï¿½ï¿½ï¿½Éµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Äµï¿½Ç°Î»ï¿½ï¿½
 }
 
 // set material property for selected elements
@@ -1377,12 +1573,12 @@ void Simulation::LoadPerConstraintMaterialProperties(const char* filename)
 				infile >> temp_enum; material_type = MaterialType(temp_enum);
 				infile >> mu;
 				infile >> lambda;
-				infile >> kappa;//ÉèÖÃËÄÃæÌå²ÄÖÊµÄÔ¼Êø
+				infile >> kappa;//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Êµï¿½Ô¼ï¿½ï¿½
 				(*c)->SetMaterialProperty(material_type, mu, lambda, kappa, 2 * mu + lambda);
 			}
 			else
 			{
-				infile >> stiffness;//ÉèÖÃ¸Õ¶ÈÏµÊýÓÃÓÚ¼ÆËã
+				infile >> stiffness;//ï¿½ï¿½ï¿½Ã¸Õ¶ï¿½Ïµï¿½ï¿½ï¿½ï¿½ï¿½Ú¼ï¿½ï¿½ï¿½
 				(*c)->SetMaterialProperty(stiffness);
 			}
 		}
@@ -1470,9 +1666,9 @@ void Simulation::setupConstraints()
 	switch (m_mesh->m_mesh_type)
 	{
 	case MESH_TYPE_CLOTH:
-		// procedurally generate constraints including to attachment constraints¸½¼ÓÔ¼ÊøÌõ¼þ¾ÍÊÇ¿ÉÒÔ¹Ì¶¨¶¥µãµÄ
+		// procedurally generate constraints including to attachment constraintsï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç¿ï¿½ï¿½Ô¹Ì¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	{
-		// generate stretch constraints. assign a stretch constraint for each edge.À­ÉìÔ¼Êø
+		// generate stretch constraints. assign a stretch constraint for each edge.ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½
 		EigenVector3 p1, p2;
 		for (std::vector<Edge>::iterator e = m_mesh->m_edge_list.begin(); e != m_mesh->m_edge_list.end(); ++e)
 		{
@@ -1494,7 +1690,7 @@ void Simulation::setupConstraints()
 			m_mesh->m_expanded_system_dimension_1d += 2;
 		}
 
-		// generate bending constraints. naiveÍäÇúÔ¼Êø
+		// generate bending constraints. naiveï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½
 		unsigned int i, k;
 		for (i = 0; i < m_mesh->m_dim[0]; ++i)
 		{
@@ -1625,12 +1821,12 @@ void Simulation::setupConstraints()
 	}
 }
 
-void Simulation::dampVelocity()//Ä£ÄâÏÖÊµÊÀ½çÖÐµÄÄ¦éßÁ¦ºÍ×èÁ¦Ð§¹û
+void Simulation::dampVelocity()//Ä£ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½Ðµï¿½Ä¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð§ï¿½ï¿½
 {
 	if (std::abs(m_damping_coefficient) < EPSILON)
 		return;
 
-	m_mesh->m_current_velocities *= 1 - m_damping_coefficient;//ÖÊµãµÄËÙ¶È»áÖð½¥Ç÷ÓÚ0
+	m_mesh->m_current_velocities *= 1 - m_damping_coefficient;//ï¿½Êµï¿½ï¿½ï¿½Ù¶È»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½0
 
 	//// post-processing damping
 	//EigenVector3 pos_mc(0.0, 0.0, 0.0), vel_mc(0.0, 0.0, 0.0);
@@ -1708,7 +1904,7 @@ void Simulation::calculateExternalForce()
 }
 
 VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
-{//½øÐÐÅö×²¼ì²â²¢¼ÆËã²¼ÁÏÓë³¡¾°ÖÐ¾²Ì¬ÎïÌåÖ®¼äµÄ´©Í¸Éî¶È
+{//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²ï¿½ï¿½â²¢ï¿½ï¿½ï¿½ã²¼ï¿½ï¿½ï¿½ë³¡ï¿½ï¿½ï¿½Ð¾ï¿½Ì¬ï¿½ï¿½ï¿½ï¿½Ö®ï¿½ï¿½Ä´ï¿½Í¸ï¿½ï¿½ï¿½
 	// Naive implementation of collision detection
 	VectorX penetration(m_mesh->m_system_dimension);
 	penetration.setZero();
@@ -1721,7 +1917,7 @@ VectorX Simulation::collisionDetectionPostProcessing(const VectorX& x)
 
 		if (m_scene->StaticIntersectionTest(xi, normal, dist))
 		{
-			penetration.block_vector(i) += (dist)*normal;//´©Í¸Éî¶È
+			penetration.block_vector(i) += (dist)*normal;//ï¿½ï¿½Í¸ï¿½ï¿½ï¿½
 		}
 	}
 
@@ -1746,14 +1942,14 @@ void Simulation::collisionDetection(const VectorX& x)
 			{
 				surface_point = xi - normal * dist; // dist is negative...
 				m_collision_constraints.push_back(CollisionSpringConstraint(1e3, i, surface_point, normal));
-			}//Ìí¼ÓÅö×²Ô¼Êø Åö×²µ¯»ÉÔ¼Êø
+			}//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²Ô¼ï¿½ï¿½ ï¿½ï¿½×²ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½ï¿½
 		}
 
 	}
 }
 
 void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, VectorX& v)
-//ËÙ¶ÈÐÞÕýºÍÎ»ÖÃÐÞÕý
+//ï¿½Ù¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 {
 	EigenVector3 xi, vi, pi, ni;
 	EigenVector3 vin, vit;
@@ -1763,15 +1959,15 @@ void Simulation::collisionResolution(const VectorX& penetration, VectorX& x, Vec
 		vi = v.block_vector(i);
 		pi = penetration.block_vector(i);
 
-		ScalarType dist = pi.norm();//¼ÆËã´©Í¸Éî¶È
+		ScalarType dist = pi.norm();//ï¿½ï¿½ï¿½ã´©Í¸ï¿½ï¿½ï¿½
 		if (dist > EPSILON) // there is collision
 		{
 			ni = -pi / dist; // normalize
 			xi -= pi;
-			vin = vi.dot(ni) * ni;//·¨ÏòÁ¿
-			vit = vi - vin;//ÇÐÏòÁ¿
+			vin = vi.dot(ni) * ni;//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+			vit = vi - vin;//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 			vi = -(m_restitution_coefficient)*vin + (1 - m_friction_coefficient) * vit;
-			//¸ù¾Ý»Ö¸´ÏµÊý£¨Åö×²Ö®ºóµÄ·´µ¯³Ì¶È£©ºÍÄ¦²ÁÏµÊý£¨Åö×²Ö®ºóµÄÄ¦éßÁ¦´óÐ¡£©¼ÆËãÅö×²Ö®ºóµÄËÙ¶È
+			//ï¿½ï¿½ï¿½Ý»Ö¸ï¿½Ïµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²Ö®ï¿½ï¿½Ä·ï¿½ï¿½ï¿½ï¿½Ì¶È£ï¿½ï¿½ï¿½Ä¦ï¿½ï¿½Ïµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²Ö®ï¿½ï¿½ï¿½Ä¦ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²Ö®ï¿½ï¿½ï¿½ï¿½Ù¶ï¿½
 			x.block_vector(i) = xi;
 			v.block_vector(i) = vi;
 		}
@@ -1860,6 +2056,50 @@ void Simulation::integrateImplicitMethod()
 
 
 	m_ls_is_first_iteration = true;
+
+
+	if (use_cs)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, gradient_dir.size() * sizeof(ScalarType),
+			gradient_dir.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, DescentID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, descent_dir.size() * sizeof(ScalarType),
+			descent_dir.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, DescentID);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
+			x.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER,m_yID);
+		glBufferData(GL_SHADER_STORAGE_BUFFER, m_y.size() * sizeof(ScalarType),
+			m_y.data(), GL_DYNAMIC_DRAW);
+
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
+
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	}
+
+	
+
+
 
 	for (m_current_iteration = 0; !converge && m_current_iteration < m_iterations_per_frame; ++m_current_iteration)
 	{
@@ -1975,7 +2215,7 @@ void Simulation::integrateImplicitMethod()
 	outFile_e.close();
 	outFile_t.close();
 
-	if (m_processing_collision)//×îºó½øÐÐÅö×²¼ì²â£¬È·±£ÎïÌåÔÚÄ£Äâ¹ý³Ìµ±ÖÐ²»»á·¢Éú²»ºÏÀíµÄ½á¹û
+	if (m_processing_collision)//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½×²ï¿½ï¿½â£¬È·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£ï¿½ï¿½ï¿½ï¿½Ìµï¿½ï¿½Ð²ï¿½ï¿½á·¢ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä½ï¿½ï¿½
 	{
 		VectorX penetration = collisionDetectionPostProcessing(m_mesh->m_current_positions);
 		collisionResolution(penetration, m_mesh->m_current_positions, m_mesh->m_current_velocities);
@@ -2058,6 +2298,56 @@ bool Simulation::performncg(VectorX& x)
 		return false;
 }
 
+bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir)
+{
+
+	ScalarType current_energy;
+
+	descent_dir = -gradient_dir + beta * descent_dir;
+
+	ScalarType alpha_k = lineSearch_CS(x, gradient_dir, descent_dir);
+
+	x = x + descent_dir * alpha_k;
+
+
+	// ï¿½ï¿½gradient_dirï¿½ï¿½ï¿½ï¿½SSBO
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+	glBufferData(GL_SHADER_STORAGE_BUFFER,
+		m_mesh->m_vertices_number * 3 * sizeof(ScalarType), gradient_dir.data(), GL_DYNAMIC_DRAW);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+
+	// ï¿½ï¿½xï¿½ï¿½ï¿½ï¿½SSBO
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
+		x.data(), GL_DYNAMIC_DRAW);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+
+	VectorX gradient_dir_tmp = gradient_dir;
+
+	// ï¿½ï¿½ï¿½ï¿½compute shaderï¿½Ðµï¿½uniformï¿½ï¿½ï¿½ï¿½
+	GLint loc_edge_size = glGetUniformLocation(computeProgram, "edge_size");
+	glUniform1ui(loc_edge_size, m_mesh->m_edge_list.size());
+
+
+	// ï¿½ï¿½ï¿½ï¿½compute shaderï¿½ï¿½ï¿½ï¿½
+	glUseProgram(computeProgram);
+	glDispatchCompute((m_mesh->m_edge_list.size() + 9) / 10, 1, 1);
+	glMemoryBarrier(GL_ALL_BARRIER_BITS);
+
+
+
+	for (size_t i = 0; i < gradient_dir.size(); ++i) {
+		gradient_dir[i] = 1.0 * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
+	}
+
+	// Ô­ï¿½ï¿½ï¿½ï¿½
+	//evaluateGradient(x, gradient_dir);
+
+
+	return true;
+
+}
+
 bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir)
 {
 	//const char* computeShaderSource = {};
@@ -2082,7 +2372,6 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 	m_lbfgs_last_gradient = gradient_dir;
 
 
-	descent_dir = LBFGS_Pk;
 
 	descent_dir = LBFGS_Pk + beta * descent_dir;
 
@@ -2090,19 +2379,19 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 
 	x = x + descent_dir * alpha_k;
 
-	// °Ñedge_list´«ÈëSSBO
+	// ï¿½ï¿½edge_listï¿½ï¿½ï¿½ï¿½SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
 		m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW); 
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 
-	// °Ñgradient_dir´«ÈëSSBO
+	// ï¿½ï¿½gradient_dirï¿½ï¿½ï¿½ï¿½SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID); 
 	glBufferData(GL_SHADER_STORAGE_BUFFER,
 		m_mesh->m_vertices_number*3 * sizeof(ScalarType), gradient_dir.data(), GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
 
-	// °Ñx´«ÈëSSBO
+	// ï¿½ï¿½xï¿½ï¿½ï¿½ï¿½SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
 		x.data(), GL_DYNAMIC_DRAW);
@@ -2110,35 +2399,35 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 
 	VectorX gradient_dir_tmp = gradient_dir;
 
-	// ÉèÖÃcompute shaderÖÐµÄuniform±äÁ¿
+	// ï¿½ï¿½ï¿½ï¿½compute shaderï¿½Ðµï¿½uniformï¿½ï¿½ï¿½ï¿½
 	GLint loc_edge_size = glGetUniformLocation(computeProgram, "edge_size");
 	glUniform1ui(loc_edge_size, m_mesh->m_edge_list.size());
 
 
-	// Æô¶¯compute shader¼ÆËã
+	// ï¿½ï¿½ï¿½ï¿½compute shaderï¿½ï¿½ï¿½ï¿½
 	glUseProgram(computeProgram);
 	glDispatchCompute((m_mesh->m_edge_list.size() + 9) / 10, 1, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
 
-	// °ÑgradientµÄÊý¾Ý´ÓSSBOÖÐ¶Á»Øcpu
+	// ï¿½ï¿½gradientï¿½ï¿½ï¿½ï¿½ï¿½Ý´ï¿½SSBOï¿½Ð¶ï¿½ï¿½ï¿½cpu
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
 		gradient_dir.size() * sizeof(float),
 		gradient_dir.data());
-	// °ÑxµÄÊý¾Ý¶Á»Øcpu
+	// ï¿½ï¿½xï¿½ï¿½ï¿½ï¿½ï¿½Ý¶ï¿½ï¿½ï¿½cpu
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
 		x.size() * sizeof(float),
 		x.data());
 
 	//gradient_dir = m_mesh->m_mass_matrix * (x - m_y) + m_h * m_h * gradient_dir;
-	// Ò²Ó¦¸ÃÓÃcompute shader£¬ remain_todo
+	// Ò²Ó¦ï¿½ï¿½ï¿½ï¿½compute shaderï¿½ï¿½ remain_todo
 	for (size_t i = 0; i < gradient_dir.size(); ++i) {
 		gradient_dir[i] = 1.0 * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
 	}
 
-	// Ô­´úÂë
+	// Ô­ï¿½ï¿½ï¿½ï¿½
 	//evaluateGradient(x, gradient_dir);
 
 
@@ -2395,7 +2684,7 @@ bool Simulation::performNewtonsMethodOneIteration(VectorX& x)
 	VectorX descent_dir;
 
 	linearSolve(descent_dir, hessian, gradient);
-	//ÏßÐÔÇó½â²¿·Öµ÷ÓÃÖ±½ÓÇó½â»òÕßµü´úCGÇó½â
+	//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½â²¿ï¿½Öµï¿½ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ßµï¿½ï¿½ï¿½CGï¿½ï¿½ï¿½
 	descent_dir = -descent_dir;
 
 	timer.TocAndReport("solve time", m_verbose_show_converge);
@@ -3455,12 +3744,12 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 
 		int K = 8;
 
-		// ¼ÆËãlinesearch°Ë¸öK
-		glUseProgram(computeProgram);
+		// ï¿½ï¿½ï¿½ï¿½linesearchï¿½Ë¸ï¿½K
+		glUseProgram(energy_for_linesearch_program);
 		glDispatchCompute(K, 1, 1);
 		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
-		// ÅÐ¶ÏÓÃÄÄ¸öt
+		// ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½Ä¸ï¿½t
 		glUseProgram(computeProgram);
 		glDispatchCompute(K, 1, 1);
 		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -3468,7 +3757,7 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		glUseProgram(computeProgram);
 		glDispatchCompute(1, 1, 1);
 
-		// ¶ÁÈ¡½á¹û
+		// ï¿½ï¿½È¡ï¿½ï¿½ï¿½
 		int i;
 		glGetBufferSubData(resultSSBO, 0, sizeof(int), &i);
 
@@ -3476,6 +3765,9 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 
 		m_ls_step_size = t;
 	}
+
+	return m_ls_step_size;
+
 }
 
 ScalarType Simulation::lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
@@ -3981,7 +4273,7 @@ ScalarType Simulation::conjugateGradientWithInitialGuess(VectorX& x, const Spars
 
 	return sqrt(rsnew);
 }
-//Cholesky ·Ö½â
+//Cholesky ï¿½Ö½ï¿½
 void Simulation::factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper>& lltSolver, char* warning_msg)
 {
 	SparseMatrix A_prime = A;
