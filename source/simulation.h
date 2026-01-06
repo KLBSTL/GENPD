@@ -364,6 +364,7 @@ protected:
 	// hard coded collision plane for demo
 	bool m_processing_collision;
 
+public:
 	// use compute shader
 	bool use_cs;
 	GLuint gradient_shader,energy_shader,
