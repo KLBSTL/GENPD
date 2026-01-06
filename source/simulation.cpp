@@ -122,64 +122,12 @@ Simulation::Simulation()
 
 	if (use_cs)
 	{
-		const char* computeShaderSource = R"(#version 430
-
-layout( local_size_x = 10 ) in;
-
-uniform uint edge_size;
-
-struct Edge
-{
-    uint m_v1, m_v2; // indices of endpoint vertices
-    uint m_tri1, m_tri2; // indices of adjacent faces
-};
-
-layout(std430, binding = 0) buffer EdgeBuffer {
-    Edge edges[];
-};
-
-layout(std430, binding = 1) buffer gradientBuffer {
-    float gradient[];
-};
-
-layout(std430, binding = 2) buffer x_posBuffer {
-    float x_pos[];
-};
-
-//layout(std430, binding = 3) buffer m_y {
-//    float m_y[];
-//};
-
-void main() {
-
-    
-    uint idx = gl_GlobalInvocationID.x;
-
-    if(idx < edge_size){
-        Edge e = edges[idx];
-
-        // 获取顶点索引
-        uint i = e.m_v1 * 3;
-        uint j = e.m_v2 * 3;
-
-        vec3 x_ij = vec3(x_pos[i], x_pos[i+1], x_pos[i+2])
-                  - vec3(x_pos[j], x_pos[j+1], x_pos[j+2]);
-
-        vec3 g_ij = 3000 * (length(x_ij) * 0.1) * normalize(x_ij);
-
-        gradient[i]   += g_ij.x;
-        gradient[i+1] += g_ij.y;
-        gradient[i+2] += g_ij.z;
-
-        gradient[j]   -= g_ij.x;
-        gradient[j+1] -= g_ij.y;
-        gradient[j+2] -= g_ij.z;
-    }
-}
-)";
+		
 		computeShader = glCreateShader(GL_COMPUTE_SHADER);
-		glShaderSource(computeShader, 1, &computeShaderSource, NULL);
+		glShaderSource(computeShader, 1, &gradient_s, NULL);
 		glCompileShader(computeShader);
+
+
 
 
 		GLint success = 0;
@@ -209,6 +157,25 @@ void main() {
 		glGenBuffers(1, &xID);
 
 	}
+}
+
+void Simulation::set_source()
+{
+	gradient_source = {}, energy_source = {}, energy_for_linesearch_source = {}
+	, colliEnerge_source = {}, choose_valid_source = {}, choose_final_source = {};
+
+}
+
+void Simulation::set_shader()
+{
+	gradient_shader, energy_shader,
+		energy_for_linesearch_shader, colliEnergy_shader, choose_valid_shader, choose_final_shader;
+
+}
+
+void Simulation::Create_SSBO()
+{
+	
 }
 
 Simulation::~Simulation()
@@ -1916,7 +1883,7 @@ void Simulation::integrateImplicitMethod()
 			if (use_cs)
 			{
 				converge = performNCG_CS(x, beta, gradient_dir, descent_dir);
-				std::cout << "use_cs" << std::endl;
+				//std::cout << "use_cs" << std::endl;
 			}
 			else
 			{
@@ -2123,55 +2090,63 @@ bool Simulation::performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_d
 
 	x = x + descent_dir * alpha_k;
 
+	// 把edge_list传入SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
 		m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW); 
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 
-
+	// 把gradient_dir传入SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID); 
 	glBufferData(GL_SHADER_STORAGE_BUFFER,
 		m_mesh->m_vertices_number*3 * sizeof(ScalarType), gradient_dir.data(), GL_DYNAMIC_DRAW);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
 
-
+	// 把x传入SSBO
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType),
 		x.data(), GL_DYNAMIC_DRAW);
-
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
 
 	VectorX gradient_dir_tmp = gradient_dir;
 
-
+	// 设置compute shader中的uniform变量
 	GLint loc_edge_size = glGetUniformLocation(computeProgram, "edge_size");
 	glUniform1ui(loc_edge_size, m_mesh->m_edge_list.size());
 
-	glDispatchCompute((m_mesh->m_edge_list.size() + 9) / 10, 1, 1);
 
+	// 启动compute shader计算
+	glUseProgram(computeProgram);
+	glDispatchCompute((m_mesh->m_edge_list.size() + 9) / 10, 1, 1);
 	glMemoryBarrier(GL_ALL_BARRIER_BITS);
 
 
-
+	// 把gradient的数据从SSBO中读回cpu
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
 		gradient_dir.size() * sizeof(float),
 		gradient_dir.data());
-
+	// 把x的数据读回cpu
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
 		x.size() * sizeof(float),
 		x.data());
 
 	//gradient_dir = m_mesh->m_mass_matrix * (x - m_y) + m_h * m_h * gradient_dir;
+	// 也应该用compute shader， remain_todo
 	for (size_t i = 0; i < gradient_dir.size(); ++i) {
 		gradient_dir[i] = 1.0 * (x[i] - m_y[i]) + m_h * m_h * gradient_dir[i];
 	}
 
+	// 原代码
 	//evaluateGradient(x, gradient_dir);
 
-	VectorX g_yk = gradient_dir - gradient_dir_tmp;
-	VectorX x_sk = x - m_lbfgs_last_x;
+
+
+
+
+	/*VectorX g_yk = gradient_dir - gradient_dir_tmp;
+	VectorX x_sk = x - m_lbfgs_last_x;*/
 	beta = gradient_dir.norm() * gradient_dir.norm() / (gradient_dir_tmp.norm() * gradient_dir_tmp.norm());
 
 	if (-descent_dir.dot(gradient_dir) < EPSILON_SQUARE)
@@ -2212,7 +2187,7 @@ bool Simulation::performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir,
 
 
 	m_lbfgs_last_x = x;
-	m_lbfgs_last_gradient = gradient_dir;
+	// m_lbfgs_last_gradient = gradient_dir;
 
 
 	// assign descent direction
@@ -2230,8 +2205,8 @@ bool Simulation::performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir,
 	VectorX gradient_dir_tmp = gradient_dir;
 
 	evaluateGradient(x, gradient_dir);
-	VectorX g_yk = gradient_dir - gradient_dir_tmp;
-	VectorX x_sk = x - m_lbfgs_last_x;
+	// VectorX g_yk = gradient_dir - gradient_dir_tmp;
+	// VectorX x_sk = x - m_lbfgs_last_x;
 	beta = gradient_dir.norm() * gradient_dir.norm() / (gradient_dir_tmp.norm() * gradient_dir_tmp.norm());
 	//beta = gradient_dir.dot(g_yk) / (gradient_dir_tmp.norm() * gradient_dir_tmp.norm());
 	//std::cout << "   beta  #" << beta<<std::endl;
@@ -3124,21 +3099,6 @@ ScalarType Simulation::evaluateEnergyPureConstraint(const VectorX& x, const Vect
 		}
 	}
 
-	//energy -= f_ext.dot(x);
-
-	//// collision
-	//for (unsigned int i = 1; i * 3 < x.size(); i++)
-	//{
-	//	EigenVector3 xi = x.block_vector(i);
-	//	EigenVector3 n;
-	//	ScalarType d;
-	//	if (m_scene->StaticIntersectionTest(xi, n, d))
-	//	{
-
-	//	}
-	//}
-
-	// hardcoded collision plane
 	if (m_processing_collision)
 	{
 		energy += evaluateEnergyCollision(x);
@@ -3477,6 +3437,45 @@ void Simulation::evaluateHessianCollision(const VectorX& x, SparseMatrix& hessia
 	}
 
 	hessian_matrix.setFromTriplets(h_triplets.begin(), h_triplets.end());
+}
+
+ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
+{
+	if (m_enable_line_search)
+	{
+		VectorX x_plus_tdx(m_mesh->m_system_dimension);
+		ScalarType t = 1.0 / m_ls_beta;
+		ScalarType g_plus_d;
+
+		ScalarType currentObjectiveValue;
+
+		currentObjectiveValue = evaluateEnergy(x);
+
+		g_plus_d = (gradient_dir.transpose() * descent_dir)(0);
+
+		int K = 8;
+
+		// 计算linesearch八个K
+		glUseProgram(computeProgram);
+		glDispatchCompute(K, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		// 判断用哪个t
+		glUseProgram(computeProgram);
+		glDispatchCompute(K, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		glUseProgram(computeProgram);
+		glDispatchCompute(1, 1, 1);
+
+		// 读取结果
+		int i;
+		glGetBufferSubData(resultSSBO, 0, sizeof(int), &i);
+
+		t = (i >= 0) ? t0 * pow(beta, i) : 0.0f;
+
+		m_ls_step_size = t;
+	}
 }
 
 ScalarType Simulation::lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)

@@ -126,6 +126,7 @@ public:
 	void SaveAttachmentConstraint(const char* filename);
 	void LoadAttachmentConstraint(const char* filename);
 
+
 	// handles
 	void NewHandle(const std::vector<unsigned int>& indices, const glm::vec3 color);
 	void DeleteHandle();
@@ -365,9 +366,19 @@ protected:
 
 	// use compute shader
 	bool use_cs;
-	GLuint computeShader;
-	GLuint computeProgram;
-	GLuint edgeID, gradientID, xID;
+	GLuint gradient_shader,energy_shader,
+		energy_for_linesearch_shader,colliEnergy_shader,choose_valid_shader,choose_final_shader;
+
+	GLuint gradient_program, energy_program,
+		energy_for_linesearch_program, colliEnergy_program, choose_valid_program, choose_final_program;
+
+	GLuint edgeID, gradientID, xID,energyID,fixededgesID,FlagID,ResultID,DesentID;
+
+	char* gradient_source = {}, energy_source = {}, energy_for_linesearch_source = {}
+	, colliEnergy_source = {}, choose_valid_source = {}, choose_final_source = {};
+
+
+
 
 	VectorX gradient_dir;
 
@@ -397,6 +408,9 @@ private:
 	bool performLBFGSOneIteration(VectorX& x);// our method
 	bool performncg(VectorX& x);
 	bool performNCG_CS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
+	void set_source();
+	void set_shader();
+	void Create_SSBO();
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	void LBFGSKernelLinearSolve(VectorX& r, VectorX gf_k, ScalarType scaled_identity_constant);
@@ -456,6 +470,7 @@ private:
 
 	// line search
 	ScalarType lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
+	ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType linesearchWithPrefetchedEnergyAndGradientComputing(const VectorX& x, const ScalarType current_energy, const VectorX& gradient_dir, const VectorX& descent_dir, ScalarType& next_energy, VectorX& next_gradient_dir);
 	ScalarType lineSearch_ncg(const VectorX& x, const  VectorX& gradient_dir, VectorX& descent_dir, const SparseMatrix& Hessian);
 
@@ -484,6 +499,7 @@ private:
 	void factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper>& lltSolver, char* warning_msg = ""); // factorize matrix A using LLT decomposition
 
 	void generateRandomVector(const unsigned int size, VectorX& x); // generate random vector varing from [-1 1].
+	
 };
 
 #endif
