@@ -3,7 +3,7 @@ layout(local_size_x = 1) in;
 
 
 layout(std430,binding = 5) buffer Flags {
-    int valid[K];
+    int valid[];
 };
 
 layout(std430,binding = 6) buffer Result {
@@ -11,7 +11,10 @@ layout(std430,binding = 6) buffer Result {
 };
 
 void main() {
-    for (int i = 0; i < K; ++i) {
+
+    if (gl_GlobalInvocationID.x != 0) return;
+
+    for (int i = 0; i < 8; ++i) {
         if (valid[i] == 1) {
             chosen_i = i;
             return;

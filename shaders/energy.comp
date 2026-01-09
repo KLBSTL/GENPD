@@ -4,7 +4,16 @@ layout( local_size_x = 256 ) in;
 
 uniform float rest_length;
 
-uniform uint edge_size;
+layout(std140,binding = 9) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
 
 struct Edge
 {
@@ -27,8 +36,9 @@ layout(std430, binding = 2) buffer x_posBuffer {
 layout(std430, binding = 3) buffer Data {
     float energy;
 };
-
-
+layout(std430, binding = 8) buffer m_y {
+    float m_y[];
+};
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
@@ -40,17 +50,17 @@ void main() {
         uint i = e.m_v1 * 3;
         uint j = e.m_v2 * 3;
 
-        vec3 x_ij = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
-        //        vec3 g_ij = stiffness * (length(x_ij) - m_rest_length) * normalize(x_ij);
+        vec3 p_i = vec3(x_pos[i], x_pos[i+1], x_pos[i+2]);
+        vec3 p_j = vec3(x_pos[j], x_pos[j+1], x_pos[j+2]);
 
-//        vec3 g_ij = 3000 * (length(x_ij) * 0.1) * normalize(x_ij);
+        vec3 x_ij = p_i - p_j;
 
-        ld_ij = length(x_ij) - rest_length;
+        float dist = length(x_ij);
+        float ld_ij = dist - rest_length;
 
-        e_ij = 0.5 * 3000 * ld_ij * ld_ij;
+        float e_ij = 0.5 * float(stiffness) * ld_ij * ld_ij;
 
-
-        energe += e_ij;
+        atomicAdd(energy, e_ij);
     }
 
 }

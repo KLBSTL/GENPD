@@ -2,13 +2,17 @@
 
 layout( local_size_x = 1 ) in;
 
-//uniform vec3 m_external_force;
-//uniform float stiffness;
-//uniform float h_square;
-//uniform float m_rest_length;
-//uniform float m_mass_matrix; //  m_mesh->m_mass_matrix
-uniform float m_h;
-uniform uint gradient_size;
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stifness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
 
 layout(std430, binding = 1) buffer gradientBuffer {
     float gradient[];
@@ -26,7 +30,7 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
 
     if(idx < gradient_size){
-        gradient[idx] = m_mass_matrix * (x[idx] - m_y[idx]) + h_square * gradient[idx];
+        gradient[idx] = m_mass_matrix * (x[idx] - m_y[idx]) + m_h * m_h * gradient[idx];
     }
 
 }

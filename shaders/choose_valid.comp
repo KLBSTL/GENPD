@@ -1,29 +1,38 @@
-
 #version 430
+layout(local_size_x = 32) in;
 
-
-layout(local_size_x = 1) in;
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stifness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
 
 uniform float currentEnergy;
-uniform float alpha;
 uniform float grad_dot_d;
 
 
 layout(std430, binding = 3) buffer Data {
-    float energy[K];
+    float energy[];
 };
 
 layout(std430,binding = 5) buffer Flags {
     int valid[K];
 };
 
-
-
 void main() {
     uint i = gl_GlobalInvocationID.x;
+
+    if (i >= uint(K)) {
+        return;
+    }
 
     float t = t0 * pow(beta, float(i));
     float rhs = currentEnergy + alpha * t * grad_dot_d;
 
-    valid[i] = (energy[i] < rhs) ? 1 : 0;
+    valid[i] = (energy[i] <= rhs) ? 1 : 0;
 }

@@ -8,6 +8,18 @@ struct Edge
     uint m_tri1, m_tri2;
 };
 
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stifness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
 layout(std430, binding = 0) buffer EdgeBuffer {
     Edge edges[];
 };
@@ -15,25 +27,20 @@ layout(std430, binding = 2) buffer x_posBuffer {
     float x_pos[];
 };
 layout(std430, binding = 3) buffer Data {
-    float energy[K];
+    float energy[];
 };
 layout(std430,binding = 7) buffer Descent {
     float d[];
 };
 
-uniform int system_dim;
-uniform float t0;
-uniform float beta;
-uniform int K;
+uniform float alpha_k;
 
-uniform uint edge_size;
-
-shared float energy_shared;
+shared float energy_shared[256];
 
 
-float compute_energy_contribution(uint cidx) {
-    uint i = edges[cidx].p0;
-    uint j = edges[cidx].p1;
+float compute_energy_contribution(uint cidx,float t) {
+    uint i = edges[cidx].m_v1;
+    uint j = edges[cidx].m_v2;
 
     vec3 xi = vec3(
         x_pos[i*3 + 0] + t*d[i*3 + 0],
@@ -46,7 +53,9 @@ float compute_energy_contribution(uint cidx) {
         x_pos[j*3 + 2] + t*d[j*3 + 2]
     );
 
-    return 0.5 * k * length(xi - xj) ^ 2;
+    float l = length(xi - xj);
+
+    return 0.5 * stiffness * l * l;
 }
 
 void main() {
@@ -58,12 +67,39 @@ void main() {
     // 并行计算 E(x + t d)
     float local_sum = 0.0;
     for (uint idx = tid; idx < edge_size ; idx += gl_WorkGroupSize.x) {
-        local_sum += compute_energy_contribution(idx);
+        local_sum += compute_energy_contribution(idx,t);
     }
 
-    local_sum = reduce(local_sum);
+    energy_shared[tid] = local_sum;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            energy_shared[tid] += energy_shared[tid + stride];
+        }
+        barrier();
+    }
 
     if (tid == 0) {
-        energy[i] = local_sum;
+        energy[i] = energy_shared[0];
     }
 }
+
+
+
+
+
+//struct alignas(16) ParamsUBO {
+//	float t0;  // 0
+//	float beta; // 4
+//	int K; // 8
+//	int stifness; // 12
+//	int edge_size; // 16
+//	float current_energy; // 20   //
+//	float alpha; // 24
+//	float grad_dot_d; // 28       //
+//	int fixed_edge_size; // 32    //
+//	float m_h; // 36
+//	int gradient_size; // 40
+//	float _pad; // 44
+//};
