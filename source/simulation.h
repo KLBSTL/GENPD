@@ -1,4 +1,4 @@
-// ---------------------------------------------------------------------------------//
+﻿// ---------------------------------------------------------------------------------//
 // Copyright (c) 2015, Regents of the University of Pennsylvania                    //
 // All rights reserved.                                                             //
 //                                                                                  //
@@ -99,6 +99,30 @@ typedef enum
 	LS_TYPE_WOLFE,
 	LS_TYPE_TOTAL_NUM,
 } LinesearchType;
+
+
+struct alignas(16) ParamsUBO {
+	float t0;  // 0
+	float beta; // 4
+	int K; // 8
+	int stiffness; // 12
+	int edge_size; // 16
+	float alpha; // 20
+	float m_h; // 24
+	int gradient_size; // 28
+	int vertex_size; // 32
+	int attachment_size; // 36
+	int _pad0; // 40
+	int _pad1; // 44
+};
+
+struct alignas(16) AttachmentGPU {
+	unsigned int vertex_index;
+	float stiffness;
+	float _pad0;
+	float _pad1;
+	float fixed_point[4];
+};
 
 class Simulation
 {
@@ -364,25 +388,624 @@ protected:
 	// hard coded collision plane for demo
 	bool m_processing_collision;
 
-public:
 	// use compute shader
 	bool use_cs;
-	GLuint gradient_shader,energy_shader,
-		energy_for_linesearch_shader,colliEnergy_shader,choose_valid_shader,choose_final_shader,compute_shader;
+	GLuint gradient_shader, energy_shader, descent_shader, iner_shader,
+		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader;
 
-	GLuint gradient_program, energy_program,
-		energy_for_linesearch_program, colliEnergy_program, choose_valid_program, choose_final_program, compute_program;
+	GLuint gradient_program, energy_program, computeX_program, descent_program, iner_program,
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program;
 
-	GLuint edgeID, gradientID, xID,energyID,fixededgesID,FlagID,ResultID,DescentID, m_yID;
+	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID;
+	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID;
+	bool m_cs_constraint_data_dirty;
+	std::vector<unsigned int> m_cs_vertex_edge_offsets;
+	std::vector<unsigned int> m_cs_vertex_edge_indices;
+	std::vector<AttachmentGPU> m_cs_attachments;
 
-	const char* gradient_source = R"()", *energy_source = R"()", *energy_for_linesearch_source = R"()"
-	, *colliEnergy_source = R"()", *choose_valid_source = R"()", *choose_final_source = R"()", *compute_source= R"()";
+	const char* gradient_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+//uniform float m_rest_length;
+//uniform float m_mass_matrix; //  m_mesh->m_mass_matrix
+
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+    float rest_length;
+    int stiffness;
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+//layout(std430, binding = 3) buffer y {
+//    float m_y[];
+//};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+
+    if(idx < edge_size){
+        Edge e = edges[idx];
+
+        // ��ȡ��������
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+float res = e.rest_length;
+
+        vec3 x_ij = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
+//        vec3 g_ij = stiffness * (length(x_ij) - m_rest_length) * normalize(x_ij);
+
+        vec3 g_ij = e.stiffness * (length(x_ij) - res) * normalize(x_ij);
+
+        gradient[i] += g_ij.x;
+        gradient[i+1] += g_ij.y;
+        gradient[i+2] += g_ij.z;
+
+        gradient[j] -= g_ij.x;
+        gradient[j+1] -= g_ij.y;
+        gradient[j+2] -= g_ij.z;
+
+
+    }
+
+}
+)",
+* energy_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+// uniform float rest_length;
+
+layout(std140,binding = 9) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+    float rest_length;
+    int stiffness;
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 3) buffer Data {
+    float energy[];
+};
+layout(std430, binding = 8) buffer y {
+    float m_y[];
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < edge_size){
+        Edge e = edges[idx];
+
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+		float res = e.rest_length;
+
+        vec3 p_i = vec3(x_pos[i], x_pos[i+1], x_pos[i+2]);
+        vec3 p_j = vec3(x_pos[j], x_pos[j+1], x_pos[j+2]);
+
+        vec3 x_ij = p_i - p_j;
+
+        float dist = length(x_ij);
+        float ld_ij = dist - res;
+        
+
+        float e_ij = 0.5 * float(e.stiffness) * ld_ij * ld_ij;
+
+		energy[0] += e_ij;
+        // atomicAdd(energy, e_ij);
+    }
+
+}
+)",
+* objective_source = R"(#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+};
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+    float rest_length;
+    int stiffness;
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 3) buffer Data {
+    float energy[];
+};
+
+shared float energy_shared[256];
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+
+    float local_sum = 0.0;
+    for (uint idx = tid; idx < uint(edge_size); idx += gl_WorkGroupSize.x) {
+        Edge e = edges[idx];
+        uint i = e.m_v1 * 3u;
+        uint j = e.m_v2 * 3u;
+
+        vec3 p_i = vec3(x_pos[i], x_pos[i + 1u], x_pos[i + 2u]);
+        vec3 p_j = vec3(x_pos[j], x_pos[j + 1u], x_pos[j + 2u]);
+        float dist = length(p_i - p_j) - e.rest_length;
+        local_sum += 0.5 * float(e.stiffness) * dist * dist;
+    }
+
+    energy_shared[tid] = local_sum;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            energy_shared[tid] += energy_shared[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        energy[0] = energy_shared[0];
+    }
+}
+)",
+* energy_for_linesearch_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+    float rest_length;
+    int stiffness;
+};
+
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+layout(std430, binding = 0) buffer EdgeBuffer {
+    Edge edges[];
+};
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+layout(std430, binding = 3) buffer Data {
+    float energy[];
+};
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+layout(std430,binding = 9) buffer inertia {
+    float iner[];
+};
+
+uniform float alpha_k;
+
+shared float energy_shared[256];
+
+
+float compute_energy_contribution(uint cidx,float t) {
+    uint i = edges[cidx].m_v1;
+    uint j = edges[cidx].m_v2;
+float res = edges[cidx].rest_length;
+
+    vec3 xi = vec3(
+        x_pos[i*3 + 0] + t*d[i*3 + 0],
+        x_pos[i*3 + 1] + t*d[i*3 + 1],
+        x_pos[i*3 + 2] + t*d[i*3 + 2]
+    );
+    vec3 xj = vec3(
+        x_pos[j*3 + 0] + t*d[j*3 + 0],
+        x_pos[j*3 + 1] + t*d[j*3 + 1],
+        x_pos[j*3 + 2] + t*d[j*3 + 2]
+    );
+
+    float l = length(xi - xj) - res;
+
+    return 0.5 * float(edges[cidx].stiffness) * l * l;
+}
+
+void main() {
+    uint i = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    float t = t0 * pow(beta, float(i));
+
+    float local_sum = 0.0;
+    for (uint idx = tid; idx < edge_size ; idx += gl_WorkGroupSize.x) {
+        local_sum += compute_energy_contribution(idx,t);
+    }
+
+    energy_shared[tid] = local_sum;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            energy_shared[tid] += energy_shared[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        energy[i] = (energy_shared[0] * m_h * m_h + iner[i]);
+    }
+}
+)"
+, * colliEnergy_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+// uniform float rest_length;
+
+uniform uint edge_size;
+uniform uint fixed_edge_size;
+
+struct Edge
+{
+    uint m_v1, m_v2;
+    uint m_tri1, m_tri2;
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 3) buffer Data {
+    float energy;
+};
+
+layout(std430, binding = 4) buffer FixedEdgeBuffer {
+    Edge fixededges[];
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < fixed_edge_size){
+        Edge e = fixededges[idx];
+
+        uint i = e.m_v1 * 3;
+        uint j = e.m_v2 * 3;
+
+        vec3 x_ij = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
+        float dist = length(x_ij);
+        float e_i = 0.5 * 3000.0 * dist * dist;
+
+		energy += e_i;
+        //atomicAdd(energy, e_i);
+    }
+
+}
+
+
+)",
+* choose_valid_source = R"(#version 430
+layout(local_size_x = 32) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+uniform float currentEnergy;
+uniform float grad_dot_d;
+
+
+layout(std430, binding = 3) buffer Data {
+    float energy[];
+};
+
+layout(std430,binding = 5) buffer Flags {
+    int valid[];
+};
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+
+    if (i >= uint(K)) {
+        return;
+    }
+
+    float t = t0 * pow(beta, float(i));
+    float rhs = currentEnergy + alpha * t * grad_dot_d;
+
+    valid[i] = (energy[i] <= rhs) ? 1 : 0;
+}
+)",
+* choose_final_source = R"(#version 430
+layout(local_size_x = 1) in;
+
+
+layout(std430,binding = 5) buffer Flags {
+    int valid[];
+};
+
+layout(std430,binding = 6) buffer Result {
+    int chosen_i;
+};
+
+void main() {
+
+    if (gl_GlobalInvocationID.x != 0) return;
+
+    for (int i = 0; i < 8; ++i) {
+        if (valid[i] == 1) {
+            chosen_i = i;
+            return;
+        }
+    }
+    chosen_i = -1;
+}
+)",
+* compute_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 8) buffer y {
+    float m_y[];
+};
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < gradient_size){
+        gradient[idx] = 1.0 * (x_pos[idx] - m_y[idx]) + m_h * m_h * gradient[idx];
+    }
+
+}
+)",
+* computeX_source = R"(#version 430
+
+layout( local_size_x = 256 ) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+};
+
+uniform float alpha_k;
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+uniform uint size;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+	
+
+    if(idx < size){
+       x_pos[idx] = x_pos[idx] + d[idx] * alpha_k;
+//x_pos[idx] = 999.0;
+    }
+
+	//if(idx == 0){ x_pos[0] = 12345.0;}	
+
+}
+)", * descent_source = R"(#version 460
+
+layout( local_size_x = 256 ) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+    vec4 fixed_point;
+};
+
+
+layout(std430, binding = 1) buffer gradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+
+uniform float beta_k;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+
+    if(idx < gradient_size){
+        d[idx] = -gradient[idx] + beta_k * d[idx];
+    }
+
+}
+)", * iner_source = R"(#version 460
+
+layout( local_size_x = 256 ) in;
+
+layout(std140,binding = 0) uniform params {
+    float t0;  // 0
+    float beta; // 4
+    int K; // 8
+    int stiffness; // 12
+    int edge_size; // 16
+    float alpha; // 20
+    float m_h; // 24
+    int gradient_size; // 28
+    vec4 fixed_point;
+};
+
+layout(std430, binding = 2) buffer x_posBuffer {
+    float x_pos[];
+};
+layout(std430, binding = 8) buffer y {
+    float m_y[];
+};
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+layout(std430,binding = 9) buffer inertia {
+    float iner[];
+};
+shared float iner_shared[256];
+
+void main() {
+    uint i = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    float t = t0 * pow(beta, float(i));
+
+    // 并行计算 E(x + t d)
+    float local_sum = 0.0;
+    float temp = 0.0;
+    for (uint idx = tid; idx < gradient_size ; idx += gl_WorkGroupSize.x) {
+        temp = x_pos[idx] + t * d[idx];
+        local_sum += 0.5 * (temp - m_y[idx]) * (temp - m_y[idx]);
+    }
+
+	iner_shared[tid] = local_sum;
+    barrier();
+
+	for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            iner_shared[tid] += iner_shared[tid + stride];
+        }
+        barrier();
+    }
+
+    if(tid == 0){
+        iner[i] = iner_shared[0];
+    }
+}
+
+)";
 
 
 	ScalarType energy[8];
 	ScalarType valid[8];
-	int *Result;
+	ScalarType iner[8];
+	int* Result;
 	int* fixedsize;
+	GLuint pUBO;
+
+
+	ParamsUBO comp_params;
+
 
 
 
@@ -419,6 +1042,7 @@ private:
 	void set_source();
 	void set_shader();
 	void Create_SSBO();
+	ScalarType evaluatePotentialEnergyCS(const VectorX& x);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	void LBFGSKernelLinearSolve(VectorX& r, VectorX gf_k, ScalarType scaled_identity_constant);
@@ -507,7 +1131,7 @@ private:
 	void factorizeDirectSolverLLT(const SparseMatrix& A, Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper>& lltSolver, char* warning_msg = ""); // factorize matrix A using LLT decomposition
 
 	void generateRandomVector(const unsigned int size, VectorX& x); // generate random vector varing from [-1 1].
-	
+
 };
 
 #endif

@@ -225,6 +225,11 @@ void resize(int width, int height) {
 
 void timeout(int value)
 {
+
+	TimerWrapper my_ti;
+	my_ti.Tic();
+
+
     glutTimerFunc(g_timestep, timeout, g_timestep);
     // keep track of time
     g_fps_tracker.timestamp();
@@ -299,6 +304,10 @@ void timeout(int value)
     }
 
     glutPostRedisplay();
+
+
+	my_ti.Toc();
+	my_ti.Report("time :");
 }
 
 void display() {

@@ -58,6 +58,8 @@ struct Edge
 {
 	unsigned int m_v1, m_v2; // indices of endpoint vertices
 	unsigned int m_tri1, m_tri2; // indices of adjacent faces
+	float rest_length;
+	int stiffness;
 };
 
 class Mesh
@@ -112,6 +114,7 @@ public:
 
 	// for generating constraints.
 	std::vector<Edge> m_edge_list;
+	std::vector<Edge> my_edge;
 
 	// for visualizing the cloth (and selection). currently only support single floating points 
 	std::vector<glm::vec3> m_positions;
