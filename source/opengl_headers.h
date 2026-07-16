@@ -72,6 +72,9 @@ struct VBO
 	GLuint m_uniform_transformation;
 	GLuint m_uniform_enable_texture;
 	GLuint m_uniform_texture_sampler;
+	GLuint m_uniform_use_gpu_grid_normal;
+	GLuint m_uniform_gpu_grid_dim0;
+	GLuint m_uniform_gpu_grid_dim1;
 };
 
 #endif

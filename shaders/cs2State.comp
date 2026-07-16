@@ -1,0 +1,128 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 2) buffer XBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 8) buffer YBuffer {
+    float y_pos[];
+};
+
+layout(std430, binding = 16) buffer VelocityBuffer {
+    float velocity[];
+};
+
+layout(std430, binding = 18) buffer StatePositionBuffer {
+    float state_position[];
+};
+
+layout(std430, binding = 20) buffer StateStatsBuffer {
+    float state_stats[];
+};
+
+uniform uint vertex_count;
+uniform int update_mode;
+uniform float timestep;
+uniform float damping_coefficient;
+uniform vec3 acceleration;
+
+shared float local_max_position[256];
+shared float local_max_displacement[256];
+
+float max_abs_component(vec3 v) {
+    return max(max(abs(v.x), abs(v.y)), abs(v.z));
+}
+
+bool is_finite_vec3(vec3 v) {
+    return !(any(isnan(v)) || any(isinf(v)));
+}
+
+void write_finalize_state(uint vertex_index) {
+    uint base = vertex_index * 3u;
+    vec3 old_p = vec3(state_position[base], state_position[base + 1u], state_position[base + 2u]);
+    vec3 new_p = vec3(x_pos[base], x_pos[base + 1u], x_pos[base + 2u]);
+    vec3 raw_v = (new_p - old_p) / timestep;
+    vec3 damped_v = raw_v * (1.0 - damping_coefficient);
+
+    state_position[base] = new_p.x;
+    state_position[base + 1u] = new_p.y;
+    state_position[base + 2u] = new_p.z;
+    velocity[base] = damped_v.x;
+    velocity[base + 1u] = damped_v.y;
+    velocity[base + 2u] = damped_v.z;
+}
+
+void write_predict(uint vertex_index) {
+    uint base = vertex_index * 3u;
+    vec3 p = vec3(state_position[base], state_position[base + 1u], state_position[base + 2u]);
+    vec3 v = vec3(velocity[base], velocity[base + 1u], velocity[base + 2u]);
+    vec3 y = p + v * timestep + acceleration * timestep * timestep;
+
+    y_pos[base] = y.x;
+    y_pos[base + 1u] = y.y;
+    y_pos[base + 2u] = y.z;
+    x_pos[base] = y.x;
+    x_pos[base + 1u] = y.y;
+    x_pos[base + 2u] = y.z;
+}
+
+void write_finalize(uint vertex_index, uint tid) {
+    uint base = vertex_index * 3u;
+    vec3 old_p = vec3(state_position[base], state_position[base + 1u], state_position[base + 2u]);
+    vec3 new_p = vec3(x_pos[base], x_pos[base + 1u], x_pos[base + 2u]);
+    vec3 raw_v = (new_p - old_p) / timestep;
+    vec3 damped_v = raw_v * (1.0 - damping_coefficient);
+
+    state_position[base] = new_p.x;
+    state_position[base + 1u] = new_p.y;
+    state_position[base + 2u] = new_p.z;
+    velocity[base] = damped_v.x;
+    velocity[base + 1u] = damped_v.y;
+    velocity[base + 2u] = damped_v.z;
+
+    bool finite_values = is_finite_vec3(new_p) && is_finite_vec3(damped_v);
+    local_max_position[tid] = finite_values ? max_abs_component(new_p) : 3.402823e+38;
+    local_max_displacement[tid] = finite_values ? max_abs_component(new_p - old_p) : 3.402823e+38;
+}
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+    uint vertex_index = gl_GlobalInvocationID.x;
+
+    if (update_mode == 1) {
+        if (vertex_index < vertex_count) {
+            write_predict(vertex_index);
+        }
+        return;
+    }
+
+    if (update_mode == 3) {
+        if (vertex_index < vertex_count) {
+            write_finalize_state(vertex_index);
+        }
+        return;
+    }
+
+    local_max_position[tid] = 0.0;
+    local_max_displacement[tid] = 0.0;
+    if (vertex_index < vertex_count) {
+        write_finalize(vertex_index, tid);
+    }
+    barrier();
+
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            local_max_position[tid] = max(local_max_position[tid], local_max_position[tid + stride]);
+            local_max_displacement[tid] = max(local_max_displacement[tid], local_max_displacement[tid + stride]);
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        uint group_base = gl_WorkGroupID.x * 2u;
+        state_stats[group_base] = local_max_position[0];
+        state_stats[group_base + 1u] = local_max_displacement[0];
+    }
+}

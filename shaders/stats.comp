@@ -1,0 +1,67 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
+};
+
+layout(std430, binding = 1) readonly buffer GradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 7) readonly buffer DescentBuffer {
+    float d[];
+};
+
+layout(std430, binding = 14) buffer StatsBuffer {
+    float stats[];
+};
+
+layout(std430, binding = 10) buffer ScratchBuffer {
+    float scratch[];
+};
+
+shared vec2 partial_stats[256];
+
+void main() {
+    uint partial_index = gl_WorkGroupID.x;
+    uint tid = gl_LocalInvocationID.x;
+
+    float local_norm_sq = 0.0;
+    float local_dot = 0.0;
+    uint start = partial_index * gl_WorkGroupSize.x + tid;
+    uint stride = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+    for (uint idx = start; idx < uint(gradient_size); idx += stride) {
+        float g = gradient[idx];
+        float dir = d[idx];
+        local_norm_sq += g * g;
+        local_dot += g * dir;
+    }
+
+    partial_stats[tid] = vec2(local_norm_sq, local_dot);
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            partial_stats[tid] += partial_stats[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        scratch[partial_index] = partial_stats[0].x;
+        scratch[gl_NumWorkGroups.x + partial_index] = partial_stats[0].y;
+    }
+}

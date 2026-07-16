@@ -100,9 +100,11 @@ public:
 	~QueueLBFGS();
 
 	inline int capacity() { return m_capacity; }
+	inline int vectorSize() { return m_vector_size; }
 	inline bool isFull() { return m_is_full; }
 
 	int size();
+	void clear();
 	void enqueue(const VectorX& sk, const VectorX& yk);
 	void dequeue();
 

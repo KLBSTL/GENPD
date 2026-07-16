@@ -1,6 +1,6 @@
 #version 430
 
-layout( local_size_x = 1 ) in;
+layout( local_size_x = 256 ) in;
 
 layout(std140,binding = 0) uniform params {
     float t0;  // 0
@@ -30,7 +30,7 @@ void main() {
     uint idx = gl_GlobalInvocationID.x;
 
     if(idx < gradient_size){
-        gradient[idx] = m_mass_matrix * (x[idx] - m_y[idx]) + m_h * m_h * gradient[idx];
+        gradient[idx] = 1.0 * (x[idx] - m_y[idx]) + m_h * m_h * gradient[idx];
     }
 
 }

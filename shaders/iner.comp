@@ -1,0 +1,74 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
+};
+
+layout(std430, binding = 2) readonly buffer XBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 7) readonly buffer DescentBuffer {
+    float d[];
+};
+
+layout(std430, binding = 8) readonly buffer YBuffer {
+    float m_y[];
+};
+
+layout(std430, binding = 9) buffer InertiaBuffer {
+    float iner[];
+};
+
+layout(std430, binding = 10) buffer ScratchBuffer {
+    float scratch[];
+};
+
+layout(std430, binding = 13) readonly buffer MassDiagBuffer {
+    float mass_diag[];
+};
+
+shared float partial_inertia[256];
+
+void main() {
+    uint candidate_index = gl_WorkGroupID.x;
+    uint partial_index = gl_WorkGroupID.y;
+    uint tid = gl_LocalInvocationID.x;
+
+    float t = t0 * pow(beta, float(candidate_index));
+    float local_sum = 0.0;
+    uint start = partial_index * gl_WorkGroupSize.x + tid;
+    uint stride = gl_NumWorkGroups.y * gl_WorkGroupSize.x;
+    for (uint idx = start; idx < uint(gradient_size); idx += stride) {
+        float predicted = x_pos[idx] + t * d[idx];
+        float diff = predicted - m_y[idx];
+        local_sum += 0.5 * mass_diag[idx] * diff * diff;
+    }
+
+    partial_inertia[tid] = local_sum;
+    barrier();
+
+    for (uint stride = gl_WorkGroupSize.x / 2u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) {
+            partial_inertia[tid] += partial_inertia[tid + stride];
+        }
+        barrier();
+    }
+
+    if (tid == 0u) {
+        scratch[candidate_index * gl_NumWorkGroups.y + partial_index] = partial_inertia[0];
+    }
+}

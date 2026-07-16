@@ -56,6 +56,7 @@ public:
 	bool StaticIntersectionTest(const EigenVector3& p, EigenVector3& normal, ScalarType& dist);
 
 	bool IsEmpty() { return m_primitives.empty(); }
+	const std::vector<Primitive*>& GetPrimitives() const { return m_primitives; }
 
 protected:
     std::vector<Primitive*> m_primitives;

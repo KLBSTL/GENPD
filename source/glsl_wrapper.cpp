@@ -85,6 +85,9 @@ void RenderWrapper::InitShader(const char* vert_path, const char* frag_path)
 	m_vbo_handle.m_uniform_transformation = glGetUniformLocation(m_shaderprog_handle, "u_transformMatrix");
 	m_vbo_handle.m_uniform_enable_texture = glGetUniformLocation(m_shaderprog_handle, "u_choose_tex");
 	m_vbo_handle.m_uniform_texture_sampler = glGetUniformLocation(m_shaderprog_handle, "u_sampler1");
+	m_vbo_handle.m_uniform_use_gpu_grid_normal = glGetUniformLocation(m_shaderprog_handle, "u_use_gpu_grid_normal");
+	m_vbo_handle.m_uniform_gpu_grid_dim0 = glGetUniformLocation(m_shaderprog_handle, "u_gpu_grid_dim0");
+	m_vbo_handle.m_uniform_gpu_grid_dim1 = glGetUniformLocation(m_shaderprog_handle, "u_gpu_grid_dim1");
 
     // activate the shader program.
     glUseProgram(m_shaderprog_handle);

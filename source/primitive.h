@@ -105,6 +105,7 @@ public:
     virtual ~Plane() {};
 
 	virtual bool StaticIntersectionTest(const EigenVector3& p, EigenVector3& normal, ScalarType& dist);
+	const glm::vec3& Normal() const { return m_normal; }
         
 protected:
     virtual void init_visualization();
@@ -124,6 +125,7 @@ public:
     virtual ~Sphere() {};
 
 	virtual bool StaticIntersectionTest(const EigenVector3& p, EigenVector3& normal, ScalarType& dist);
+	float Radius() const { return m_radius; }
 protected:
     virtual void init_visualization();
 protected:
@@ -141,6 +143,8 @@ public:
 	virtual ~Torus() {};
 
 	virtual bool StaticIntersectionTest(const EigenVector3& p, EigenVector3& normal, ScalarType& dist);
+	float MajorRadius() const { return m_major_radius; }
+	float MinorRadius() const { return m_minor_radius; }
 protected:
 	virtual void init_visualization();
 protected:

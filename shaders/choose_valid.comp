@@ -5,11 +5,15 @@ layout(std140,binding = 0) uniform params {
     float t0;  // 0
     float beta; // 4
     int K; // 8
-    int stifness; // 12
+    int stiffness; // 12
     int edge_size; // 16
     float alpha; // 20
     float m_h; // 24
     int gradient_size; // 28
+    int vertex_size; // 32
+    int attachment_size; // 36
+    int _pad0; // 40
+    int _pad1; // 44
 };
 
 uniform float currentEnergy;
@@ -21,7 +25,7 @@ layout(std430, binding = 3) buffer Data {
 };
 
 layout(std430,binding = 5) buffer Flags {
-    int valid[K];
+    int valid[];
 };
 
 void main() {

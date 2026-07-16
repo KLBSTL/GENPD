@@ -59,7 +59,10 @@ struct Edge
 	unsigned int m_v1, m_v2; // indices of endpoint vertices
 	unsigned int m_tri1, m_tri2; // indices of adjacent faces
 	float rest_length;
-	int stiffness;
+	float stiffness;
+	int fixed_point = 0;
+	float _pad0;
+	glm::vec4 fixed_;
 };
 
 class Mesh
@@ -71,16 +74,18 @@ class Mesh
 public:
 	Mesh() : m_mesh_type() {}
 	Mesh(MeshType mesh_type) : m_mesh_type(mesh_type) {}
-	virtual ~Mesh() {Cleanup();}
+	virtual ~Mesh() { Cleanup(); releaseDrawBuffers(); }
 
 	void Reset();
-	virtual bool Init() {std::cout << "Warning: reach base class virtual init function." << std::endl; return false;}
+	virtual bool Init() { std::cout << "Warning: reach base class virtual init function." << std::endl; return false; }
 	virtual void Cleanup();
 	virtual void Update();
 
 	// Display
 	virtual void Draw(const VBO& vbos, int show_texture = 0);
 	virtual void DrawWireFrame(const VBO& vbos, int line_width = 1);
+	virtual void DrawGPUPositionNormal(const VBO& vbos, GLuint position_buffer, GLuint normal_buffer, int show_texture = 0);
+	virtual void DrawWireFrameGPUPosition(const VBO& vbos, GLuint position_buffer, int line_width = 1);
 	// IO
 	virtual void ExportToOBJ(const char* filename);
 	virtual bool ImportFromOBJ(const char* filename);
@@ -140,16 +145,33 @@ public:
 
 protected:
 	// initialize every particle pos / vel / mass / color.
-	virtual void generateParticleList() {std::cout << "Warning: reach base class virtual function." << std::endl;}
+	virtual void generateParticleList() { std::cout << "Warning: reach base class virtual function." << std::endl; }
 	// generate triangle list from vetices
-	virtual void generateTriangleList() {std::cout << "Warning: reach base class virtual function." << std::endl;}
+	virtual void generateTriangleList() { std::cout << "Warning: reach base class virtual function." << std::endl; }
 	// generate edge list from the geometry representation.
-	virtual void generateEdgeList() {std::cout << "Warning: reach base class virtual function." << std::endl;}
+	virtual void generateEdgeList() { std::cout << "Warning: reach base class virtual function." << std::endl; }
 
 	// jitter the initial condition.
 	void jitterParticlesList();
 	// update the normal per frame for visualization.
 	void computeNormal();
+	void ensureDrawBuffersInitialized();
+	void releaseDrawBuffers();
+	void ensureDynamicDrawBuffer(GLuint buffer, std::size_t required_bytes, std::size_t& tracked_bytes);
+
+protected:
+	GLuint m_draw_vbo = 0;
+	GLuint m_draw_cbo = 0;
+	GLuint m_draw_nbo = 0;
+	GLuint m_draw_tbo = 0;
+	GLuint m_draw_ibo = 0;
+	std::vector<glm::vec3> m_thread_normal_accum;
+	std::size_t m_draw_position_bytes = 0;
+	std::size_t m_draw_color_bytes = 0;
+	std::size_t m_draw_normal_bytes = 0;
+	std::size_t m_draw_texcoord_bytes = 0;
+	std::size_t m_draw_index_bytes = 0;
+	bool m_draw_static_buffers_dirty = true;
 };
 
 class ClothMesh : public Mesh
@@ -159,7 +181,7 @@ class ClothMesh : public Mesh
 
 public:
 	ClothMesh() : Mesh(MESH_TYPE_CLOTH) {}
-	ClothMesh(unsigned int dim0, unsigned int dim1) : Mesh(MESH_TYPE_CLOTH) {m_dim[0] = dim0; m_dim[1] = dim1;}
+	ClothMesh(unsigned int dim0, unsigned int dim1) : Mesh(MESH_TYPE_CLOTH) { m_dim[0] = dim0; m_dim[1] = dim1; }
 	virtual ~ClothMesh() {}
 
 	virtual bool Init();
@@ -181,13 +203,13 @@ class TetMesh : public Mesh
 
 public:
 	TetMesh() : Mesh(MESH_TYPE_TET), m_loaded_mesh(NULL) {}
-	virtual ~TetMesh() {if(m_loaded_mesh) {delete m_loaded_mesh;}}
+	virtual ~TetMesh() { if (m_loaded_mesh) { delete m_loaded_mesh; } }
 
 	virtual bool Init();
 
 protected:
 	// tet mesh if loaded from mesh file
-	MeshLoader *m_loaded_mesh;
+	MeshLoader* m_loaded_mesh;
 
 protected:
 

@@ -286,6 +286,14 @@ int QueueLBFGS::size()
 	return 0;
 }
 
+void QueueLBFGS::clear()
+{
+	m_is_empty = true;
+	m_is_full = false;
+	m_head_pointer = 0;
+	m_tail_pointer = 0;
+}
+
 void QueueLBFGS::enqueue(const VectorX & sk, const VectorX & yk)
 {
 	if (!m_is_full && m_capacity!=0)

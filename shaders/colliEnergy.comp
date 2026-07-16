@@ -2,7 +2,7 @@
 
 layout( local_size_x = 256 ) in;
 
-uniform float rest_length;
+// uniform float rest_length;
 
 uniform uint edge_size;
 uniform uint fixed_edge_size;

@@ -1,24 +1,117 @@
 #version 430
 layout(local_size_x = 1) in;
 
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
+};
 
-layout(std430,binding = 5) buffer Flags {
-    int valid[];
+layout(std430, binding = 5) buffer ControlBuffer {
+    uint control[];
+};
+
+layout(std430, binding = 3) readonly buffer EnergyBuffer {
+    float energy[];
+};
+
+layout(std430, binding = 14) readonly buffer StatsBuffer {
+    float stats[];
 };
 
 layout(std430,binding = 6) buffer Result {
     int chosen_i;
+    int accepted;
+    float step;
+    float accepted_energy;
 };
 
-void main() {
+uniform float currentEnergy;
+uniform float grad_dot_d;
+uniform int use_gpu_line_search_state;
+uniform int control_mode;
+uniform int keep_existing_accept;
+uniform int write_fallback_dispatch;
+uniform uint dispatch_group_count;
+uniform uint dispatch_partial_count;
+uniform uint shortcut_budget_on_accept;
+uniform int gpu_candidate_count;
+uniform float gpu_first_step;
 
+void write_indirect(uint group_count_x) {
+    control[0] = group_count_x;
+    control[1] = dispatch_partial_count;
+    control[2] = 1u;
+    control[4] = group_count_x;
+    control[5] = 1u;
+    control[6] = 1u;
+}
+
+void main() {
     if (gl_GlobalInvocationID.x != 0) return;
 
-    for (int i = 0; i < 8; ++i) {
-        if (valid[i] == 1) {
+    if (control_mode == 1) {
+        if (control[3] > 0u) {
+            control[3] -= 1u;
+            chosen_i = 0;
+            accepted = 1;
+            step = 1.0;
+            write_indirect(0u);
+        } else {
+            accepted = 0;
+            write_indirect(dispatch_group_count);
+        }
+        return;
+    }
+
+    if (keep_existing_accept != 0 && accepted != 0) {
+        return;
+    }
+
+    float base_energy = (use_gpu_line_search_state != 0) ? energy[0] : currentEnergy;
+    float gradient_dot_descent = (use_gpu_line_search_state != 0) ? stats[1] : grad_dot_d;
+    int energy_offset = (use_gpu_line_search_state != 0) ? 1 : 0;
+    int candidate_count = (use_gpu_line_search_state != 0 && gpu_candidate_count > 0) ? gpu_candidate_count : K;
+    float first_step = (use_gpu_line_search_state != 0 && gpu_candidate_count > 0) ? gpu_first_step : t0;
+
+    chosen_i = -1;
+    accepted = 0;
+    step = first_step;
+    for (int i = 0; i < candidate_count; ++i) {
+        step *= beta;
+    }
+    accepted_energy = base_energy;
+
+    float candidate_step = first_step;
+    for (int i = 0; i < candidate_count; ++i) {
+        float candidate_energy = energy[energy_offset + i];
+        float rhs = base_energy + alpha * candidate_step * gradient_dot_descent;
+        if (candidate_energy <= rhs) {
             chosen_i = i;
+            accepted = 1;
+            step = candidate_step;
+            accepted_energy = candidate_energy;
+            if (shortcut_budget_on_accept > 0u) {
+                control[3] = shortcut_budget_on_accept;
+            }
+            if (write_fallback_dispatch != 0) {
+                write_indirect(0u);
+            }
             return;
         }
+        candidate_step *= beta;
     }
-    chosen_i = -1;
+
+    if (write_fallback_dispatch != 0) {
+        write_indirect(dispatch_group_count);
+    }
 }

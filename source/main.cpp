@@ -30,6 +30,7 @@
 #pragma warning( disable : 4244)
 #include <omp.h>
 
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -102,6 +103,18 @@ int g_current_frame = 0;
 int g_total_frame = 0;
 bool g_export_obj = true;
 
+//----------Benchmark Mode-------------------//
+bool g_benchmark_mode = false;
+bool g_benchmark_no_render = false;
+bool g_benchmark_hide_window = false;
+bool g_benchmark_swing_attachments = false;
+bool g_benchmark_uncapped = false;
+bool g_benchmark_sync_gpu = false;
+bool g_benchmark_disable_vsync = false;
+bool g_benchmark_finish_after_display = false;
+int g_benchmark_frames = 300;
+int g_benchmark_warmup_frames = 30;
+
 //----------glut function handlers-----------//
 void resize(int, int);
 void timeout(int);
@@ -111,6 +124,14 @@ void mouse_click(int, int, int, int);
 void mouse_motion(int, int);
 void mouse_wheel(int, int, int, int);
 void mouse_over(int, int);
+void parse_command_line(int, char**);
+int parse_positive_int(const char*, const int);
+int parse_nonnegative_int(const char*, const int);
+bool should_use_uncapped_benchmark(void);
+void schedule_next_timeout(void);
+void finish_display_frame(void);
+void apply_benchmark_swap_interval(void);
+void maybe_finish_benchmark(void);
 
 //----------anttweakbar handlers----------//
 void TW_CALL set_handle(void*);
@@ -174,6 +195,7 @@ void test()
 int main(int argc, char ** argv)
 {
 	//test();
+	parse_command_line(argc, argv);
 
     // gl init
     glutInit(&argc, argv);
@@ -192,10 +214,32 @@ int main(int argc, char ** argv)
     // user init
     init();
 	glutReshapeWindow(g_screen_width, g_screen_height);
+	if (g_benchmark_mode)
+	{
+		g_pause = false;
+		g_record = false;
+		g_recording_limit = false;
+		g_only_show_sim = true;
+		g_show_mesh = !g_benchmark_no_render;
+		g_show_wireframe = false;
+		g_show_texture = false;
+		g_config_bar->Hide();
+		if (g_benchmark_hide_window)
+		{
+			glutHideWindow();
+		}
+		std::cout << "Benchmark mode enabled: warmup=" << g_benchmark_warmup_frames
+			<< " frames, measured=" << g_benchmark_frames
+			<< " frames, no_render=" << (g_benchmark_no_render ? "true" : "false")
+			<< ", uncapped=" << (g_benchmark_uncapped ? "true" : "false")
+			<< ", sync_gpu=" << (g_benchmark_sync_gpu ? "true" : "false")
+			<< ", disable_vsync=" << (g_benchmark_disable_vsync ? "true" : "false")
+			<< std::endl;
+	}
 
     // bind function callbacks
     glutDisplayFunc(display);
-    glutTimerFunc(g_timestep, timeout, g_timestep);
+    schedule_next_timeout();
     glutReshapeFunc(resize);
     glutKeyboardFunc(key_press);
     glutMouseFunc(mouse_click);
@@ -203,13 +247,69 @@ int main(int argc, char ** argv)
     glutPassiveMotionFunc(mouse_over);
     glutMouseWheelFunc(mouse_wheel);
     glutCloseFunc(cleanup);
-    glutIdleFunc(display);
+    glutIdleFunc(NULL);
 
 	omp_set_num_threads(6);
 
     glutMainLoop();
 
     return 0;
+}
+
+bool should_use_uncapped_benchmark(void)
+{
+	return g_benchmark_mode && g_benchmark_uncapped;
+}
+
+void schedule_next_timeout(void)
+{
+	const int delay_ms = should_use_uncapped_benchmark() ? 0 : g_timestep;
+	glutTimerFunc(delay_ms, timeout, delay_ms);
+}
+
+void finish_display_frame(void)
+{
+	if (g_benchmark_sync_gpu)
+	{
+		glFinish();
+	}
+
+	if (g_benchmark_finish_after_display)
+	{
+		std::cout << "Benchmark complete after " << g_current_frame
+			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+		cleanup();
+		exit(EXIT_SUCCESS);
+	}
+
+	if (should_use_uncapped_benchmark() && !g_benchmark_no_render && g_current_frame > 0)
+	{
+		schedule_next_timeout();
+	}
+}
+
+void apply_benchmark_swap_interval(void)
+{
+	if (!g_benchmark_disable_vsync)
+	{
+		return;
+	}
+
+#ifdef _WIN32
+	typedef int (__stdcall *SwapIntervalProc)(int);
+	const auto raw_proc = wglGetProcAddress("wglSwapIntervalEXT");
+	if (!raw_proc)
+	{
+		std::cout << "Benchmark disable vsync unavailable: wglSwapIntervalEXT missing." << std::endl;
+		return;
+	}
+
+	const SwapIntervalProc swap_interval = reinterpret_cast<SwapIntervalProc>(raw_proc);
+	const bool disabled = swap_interval(0) != 0;
+	std::cout << "Benchmark disable vsync: " << (disabled ? "enabled" : "failed") << std::endl;
+#else
+	std::cout << "Benchmark disable vsync unavailable: WGL is only available on Windows." << std::endl;
+#endif
 }
 
 void resize(int width, int height) {
@@ -225,17 +325,16 @@ void resize(int width, int height) {
 
 void timeout(int value)
 {
-
-	TimerWrapper my_ti;
-	my_ti.Tic();
-
-
-    glutTimerFunc(g_timestep, timeout, g_timestep);
+	const bool uncapped_benchmark = should_use_uncapped_benchmark();
+	if (!uncapped_benchmark)
+	{
+		schedule_next_timeout();
+	}
     // keep track of time
     g_fps_tracker.timestamp();
 
     // ant tweak bar update
-    int atb_feed_back = g_config_bar->Update();
+    int atb_feed_back = g_benchmark_mode ? 0 : g_config_bar->Update();
 	if (atb_feed_back&ATB_RESHAPE_WINDOW)
 	{
 		glutReshapeWindow(g_screen_width, g_screen_height);
@@ -287,12 +386,15 @@ void timeout(int value)
 
 		// update animation
 		g_simulation->AnimateHandle(g_current_frame);
-		//g_simulation->UpdateAnimation(g_current_frame);
+		if (g_benchmark_swing_attachments)
+		{
+			g_simulation->UpdateAnimation(g_current_frame);
+		}
 
 		//g_global_timer.Tic();
 		// update mesh
         g_simulation->Update();
-		g_mesh->Update();
+        g_simulation->LogFrameProfile(g_current_frame, g_fps_tracker.fpsAverage(), g_fps_tracker.fpsInstant());
 		//g_global_timer.Toc();
 		//total_time += g_global_timer.Duration();
 		//if ((g_current_frame+1)%g_interval == 0)
@@ -301,16 +403,28 @@ void timeout(int value)
 		//	total_time = 0;
 		//}
 		g_current_frame ++;
+		maybe_finish_benchmark();
     }
 
-    glutPostRedisplay();
-
-
-	my_ti.Toc();
-	my_ti.Report("time :");
+	if (!g_benchmark_no_render)
+	{
+		glutPostRedisplay();
+	}
+	else if (uncapped_benchmark && !g_benchmark_finish_after_display)
+	{
+		schedule_next_timeout();
+	}
 }
 
 void display() {
+	if (g_benchmark_no_render)
+	{
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glutSwapBuffers();
+		finish_display_frame();
+		return;
+	}
+
 
     //Always and only do this at the start of a frame, it wipes the slate clean
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -324,13 +438,37 @@ void display() {
     g_renderer->ActivateShaderprog();
     g_scene->Draw(g_renderer->getVBO());
 
+	bool use_gpu_mesh_draw = false;
+	if ((g_show_mesh || g_show_wireframe) && g_simulation)
+	{
+		use_gpu_mesh_draw = g_simulation->PrepareCS2RenderBuffers();
+	}
+
 	if (g_show_mesh)
 	{
-		g_mesh->Draw(g_renderer->getVBO(), g_show_texture & g_texture_load_succeed);
+		if (use_gpu_mesh_draw)
+		{
+			g_mesh->DrawGPUPositionNormal(
+				g_renderer->getVBO(),
+				g_simulation->CS2RenderPositionBuffer(),
+				g_simulation->CS2RenderNormalBuffer(),
+				g_show_texture & g_texture_load_succeed);
+		}
+		else
+		{
+			g_mesh->Draw(g_renderer->getVBO(), g_show_texture & g_texture_load_succeed);
+		}
 	}
 	if (g_show_wireframe)
 	{
-		g_mesh->DrawWireFrame(g_renderer->getVBO(), g_wireframe_linewidth);
+		if (use_gpu_mesh_draw)
+		{
+			g_mesh->DrawWireFrameGPUPosition(g_renderer->getVBO(), g_simulation->CS2RenderPositionBuffer(), g_wireframe_linewidth);
+		}
+		else
+		{
+			g_mesh->DrawWireFrame(g_renderer->getVBO(), g_wireframe_linewidth);
+		}
 	}
 	g_simulation->Draw(g_renderer->getVBO());
 
@@ -354,6 +492,7 @@ void display() {
     g_config_bar->Draw();
 
     glutSwapBuffers();
+	finish_display_frame();
 }
 
 void key_press(unsigned char key, int x, int y) {
@@ -459,6 +598,7 @@ void key_press(unsigned char key, int x, int y) {
 			break;
 		case 'a':
 		case 'A':
+			g_mesh->Update();
 			g_selection_tool->SelectVerticesHardCoded(g_mesh->m_positions);
 			break;
         case 'f':
@@ -493,6 +633,118 @@ void key_press(unsigned char key, int x, int y) {
     }
 
     glutPostRedisplay();
+}
+
+int parse_positive_int(const char* value, const int fallback)
+{
+	if (!value)
+	{
+		return fallback;
+	}
+
+	const int parsed_value = std::atoi(value);
+	return parsed_value > 0 ? parsed_value : fallback;
+}
+
+int parse_nonnegative_int(const char* value, const int fallback)
+{
+	if (!value)
+	{
+		return fallback;
+	}
+
+	const int parsed_value = std::atoi(value);
+	return parsed_value >= 0 ? parsed_value : fallback;
+}
+
+void parse_command_line(int argc, char** argv)
+{
+	for (int i = 1; i < argc; ++i)
+	{
+		const std::string arg(argv[i]);
+		if (arg == "--benchmark")
+		{
+			g_benchmark_mode = true;
+		}
+		else if ((arg == "--frames" || arg == "--benchmark-frames") && i + 1 < argc)
+		{
+			g_benchmark_frames = parse_positive_int(argv[++i], g_benchmark_frames);
+			g_benchmark_mode = true;
+		}
+		else if ((arg == "--warmup" || arg == "--benchmark-warmup") && i + 1 < argc)
+		{
+			g_benchmark_warmup_frames = parse_nonnegative_int(argv[++i], g_benchmark_warmup_frames);
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--no-render" || arg == "--benchmark-no-render")
+		{
+			g_benchmark_no_render = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--headless" || arg == "--benchmark-hide-window")
+		{
+			g_benchmark_hide_window = true;
+			g_benchmark_no_render = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--benchmark-swing-attachments")
+		{
+			g_benchmark_swing_attachments = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--uncapped" || arg == "--benchmark-uncapped")
+		{
+			g_benchmark_uncapped = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--sync-gpu" || arg == "--benchmark-sync-gpu")
+		{
+			g_benchmark_sync_gpu = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--disable-vsync" || arg == "--benchmark-disable-vsync")
+		{
+			g_benchmark_disable_vsync = true;
+			g_benchmark_mode = true;
+		}
+		else if (arg == "--help" || arg == "-h")
+		{
+			std::cout << "GenPD options:\n"
+				<< "  --benchmark                 Run simulation automatically and exit.\n"
+				<< "  --frames N                  Measured benchmark frames, default 300.\n"
+				<< "  --warmup N                  Warmup frames to skip in analysis, default 30.\n"
+				<< "  --no-render                 Skip scene rendering during benchmark.\n"
+				<< "  --headless                  Hide the GLUT window and skip rendering.\n"
+				<< "  --uncapped                  Benchmark without the 30 FPS timer cap.\n"
+				<< "  --sync-gpu                  Call glFinish after benchmark swap buffers.\n"
+				<< "  --disable-vsync             Try to disable WGL swap interval for benchmark.\n"
+				<< "  --benchmark-swing-attachments\n"
+				<< "                              Move attachment constraints during benchmark.\n";
+			exit(EXIT_SUCCESS);
+		}
+	}
+}
+
+void maybe_finish_benchmark(void)
+{
+	if (!g_benchmark_mode)
+	{
+		return;
+	}
+
+	if (g_current_frame >= g_benchmark_warmup_frames + g_benchmark_frames)
+	{
+		if (should_use_uncapped_benchmark() && !g_benchmark_no_render)
+		{
+			g_benchmark_finish_after_display = true;
+			return;
+		}
+
+		std::cout << "Benchmark complete after " << g_current_frame
+			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+		cleanup();
+		exit(EXIT_SUCCESS);
+	}
 }
 
 void mouse_click(int button, int state, int x, int y)
@@ -576,6 +828,7 @@ void mouse_click(int button, int state, int x, int y)
 				case GUI_MODE_SELECTION:
 					// if selection mode
 					// selection box end and selection
+					g_mesh->Update();
 					g_selection_tool->SelectVertices(g_mesh->m_positions, g_camera->GetMVP());
 					g_simulation->SelectTetConstraints(g_selection_tool->SelectedIndices());
 					g_simulation->GetPartialMaterialProperty();
@@ -597,6 +850,8 @@ void mouse_click(int button, int state, int x, int y)
 			break;
 		}
 	}
+
+	glutPostRedisplay();
 }
 
 void mouse_motion(int x, int y)
@@ -682,6 +937,8 @@ void mouse_motion(int x, int y)
 		g_mouse_old_x = x;
 		g_mouse_old_y = y;
 	}
+
+	glutPostRedisplay();
 }
 
 void mouse_wheel(int button, int dir, int x, int y)
@@ -690,6 +947,8 @@ void mouse_wheel(int button, int dir, int x, int y)
     {
         g_camera->MouseChangeDistance(1.0f, 0, (ScalarType)(dir));
     }
+
+    glutPostRedisplay();
 }
 
 void mouse_over(int x, int y)
@@ -705,6 +964,8 @@ void mouse_over(int x, int y)
 			}
 		}
 	}
+
+	glutPostRedisplay();
 }
 
 void init()
@@ -718,6 +979,8 @@ void init()
             std::cerr << "ERROR: Support for necessary OpenGL extensions missing." << std::endl;
             exit(EXIT_FAILURE);
     }
+	apply_benchmark_swap_interval();
+
 
     // config init
     fprintf(stdout, "Initializing AntTweakBar...\n");
@@ -896,13 +1159,11 @@ void TW_CALL step_through(void*)
 	g_simulation->AnimateHandle(g_current_frame);
 
     // enable step mode
-	g_simulation->SetStepMode(true);
-    // update cloth
+	g_simulation->SetStepMode(true);    // update cloth
     g_simulation->Update();
+    g_simulation->LogFrameProfile(g_current_frame, g_fps_tracker.fpsAverage(), g_fps_tracker.fpsInstant());
     // disable step mode
 	g_simulation->SetStepMode(false);
-
-	g_mesh->Update();
 
     g_current_frame++;
 }

@@ -1,105 +1,157 @@
 #version 430
 
-layout( local_size_x = 256 ) in;
+layout(local_size_x = 256) in;
 
-struct Edge
-{
-    uint m_v1, m_v2;
-    uint m_tri1, m_tri2;
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
 };
 
-
-layout(std140,binding = 0) uniform params {
-    float t0;  // 0
-    float beta; // 4
-    int K; // 8
-    int stifness; // 12
-    int edge_size; // 16
-    float alpha; // 20
-    float m_h; // 24
-    int gradient_size; // 28
+struct Edge {
+    uint m_v1;
+    uint m_v2;
+    uint m_tri1;
+    uint m_tri2;
+    float rest_length;
+    float stiffness;
+    int fixed_point;
+    float _pad0;
+    vec4 fixed_;
 };
 
-layout(std430, binding = 0) buffer EdgeBuffer {
+layout(std430, binding = 0) readonly buffer EdgeBuffer {
     Edge edges[];
 };
-layout(std430, binding = 2) buffer x_posBuffer {
+
+layout(std430, binding = 2) readonly buffer XBuffer {
     float x_pos[];
 };
-layout(std430, binding = 3) buffer Data {
+
+layout(std430, binding = 3) buffer EnergyBuffer {
     float energy[];
 };
-layout(std430,binding = 7) buffer Descent {
+
+layout(std430, binding = 7) readonly buffer DescentBuffer {
     float d[];
 };
 
-uniform float alpha_k;
+layout(std430, binding = 8) readonly buffer YBuffer {
+    float m_y[];
+};
 
-shared float energy_shared[256];
+layout(std430, binding = 10) buffer ScratchBuffer {
+    float scratch[];
+};
 
+layout(std430, binding = 13) readonly buffer MassDiagBuffer {
+    float mass_diag[];
+};
 
-float compute_energy_contribution(uint cidx,float t) {
-    uint i = edges[cidx].m_v1;
-    uint j = edges[cidx].m_v2;
+shared vec2 partial_energy[256];
+shared float shared_candidate_step;
 
-    vec3 xi = vec3(
-        x_pos[i*3 + 0] + t*d[i*3 + 0],
-        x_pos[i*3 + 1] + t*d[i*3 + 1],
-        x_pos[i*3 + 2] + t*d[i*3 + 2]
+uniform int include_current_candidate;
+uniform int gpu_line_search_mode;
+
+float compute_candidate_step(uint candidate_index) {
+    if (gpu_line_search_mode == 1) {
+        return (candidate_index == 0u) ? 0.0 : 1.0;
+    }
+
+    if (gpu_line_search_mode == 2) {
+        float t = beta;
+        for (uint i = 0u; i < candidate_index; ++i) {
+            t *= beta;
+        }
+        return t;
+    }
+
+    if (include_current_candidate != 0) {
+        if (candidate_index == 0u) {
+            return 0.0;
+        }
+        candidate_index -= 1u;
+    }
+
+    if (t0 == 0.0) {
+        return 0.0;
+    }
+
+    float t = t0;
+    for (uint i = 0u; i < candidate_index; ++i) {
+        t *= beta;
+    }
+    return t;
+}
+
+vec3 load_position(uint vertex_index, float t) {
+    uint base = vertex_index * 3u;
+    return vec3(
+        x_pos[base] + t * d[base],
+        x_pos[base + 1u] + t * d[base + 1u],
+        x_pos[base + 2u] + t * d[base + 2u]
     );
-    vec3 xj = vec3(
-        x_pos[j*3 + 0] + t*d[j*3 + 0],
-        x_pos[j*3 + 1] + t*d[j*3 + 1],
-        x_pos[j*3 + 2] + t*d[j*3 + 2]
-    );
+}
 
-    float l = length(xi - xj);
+float constraint_energy(uint edge_index, float t) {
+    Edge edge = edges[edge_index];
+    if (edge.fixed_point == 1) {
+        vec3 diff = load_position(edge.m_v1, t) - edge.fixed_.xyz;
+        return 0.5 * edge.stiffness * dot(diff, diff);
+    }
 
-    return 0.5 * stiffness * l * l;
+    vec3 diff = load_position(edge.m_v1, t) - load_position(edge.m_v2, t);
+    float stretch = length(diff) - edge.rest_length;
+    return 0.5 * edge.stiffness * stretch * stretch;
 }
 
 void main() {
-    uint i = gl_WorkGroupID.x;
+    uint candidate_index = gl_WorkGroupID.x;
+    uint partial_index = gl_WorkGroupID.y;
     uint tid = gl_LocalInvocationID.x;
 
-    float t = t0 * pow(beta, float(i));
-
-    // 并行计算 E(x + t d)
-    float local_sum = 0.0;
-    for (uint idx = tid; idx < edge_size ; idx += gl_WorkGroupSize.x) {
-        local_sum += compute_energy_contribution(idx,t);
+    if (tid == 0u) {
+        shared_candidate_step = compute_candidate_step(candidate_index);
+    }
+    barrier();
+    float t = shared_candidate_step;
+    float local_constraint = 0.0;
+    uint start = partial_index * gl_WorkGroupSize.x + tid;
+    uint stride = gl_NumWorkGroups.y * gl_WorkGroupSize.x;
+    for (uint edge_index = start; edge_index < uint(edge_size); edge_index += stride) {
+        local_constraint += constraint_energy(edge_index, t);
     }
 
-    energy_shared[tid] = local_sum;
+    float local_inertia = 0.0;
+    for (uint idx = start; idx < uint(gradient_size); idx += stride) {
+        float predicted = x_pos[idx] + t * d[idx];
+        float diff = predicted - m_y[idx];
+        local_inertia += 0.5 * mass_diag[idx] * diff * diff;
+    }
+
+    partial_energy[tid] = vec2(local_constraint, local_inertia);
     barrier();
 
-    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+    for (uint stride = gl_WorkGroupSize.x / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
-            energy_shared[tid] += energy_shared[tid + stride];
+            partial_energy[tid] += partial_energy[tid + stride];
         }
         barrier();
     }
 
-    if (tid == 0) {
-        energy[i] = energy_shared[0];
+    if (tid == 0u) {
+        float total = m_h * m_h * partial_energy[0].x + partial_energy[0].y;
+        scratch[candidate_index * gl_NumWorkGroups.y + partial_index] = total;
     }
 }
 
-
-
-
-
-//struct alignas(16) ParamsUBO {
-//	float t0;  // 0
-//	float beta; // 4
-//	int K; // 8
-//	int stifness; // 12
-//	int edge_size; // 16
-//	float current_energy; // 20   //
-//	float alpha; // 24
-//	float grad_dot_d; // 28       //
-//	int fixed_edge_size; // 32    //
-//	float m_h; // 36
-//	int gradient_size; // 40
-//	float _pad; // 44
-//};

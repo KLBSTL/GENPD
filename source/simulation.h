@@ -1,4 +1,4 @@
-ï»¿// ---------------------------------------------------------------------------------//
+// ---------------------------------------------------------------------------------//
 // Copyright (c) 2015, Regents of the University of Pennsylvania                    //
 // All rights reserved.                                                             //
 //                                                                                  //
@@ -34,6 +34,7 @@
 
 #include <vector>
 #include <deque>
+#include <string>
 
 #include "global_headers.h"
 #include "anttweakbar_wrapper.h"
@@ -124,6 +125,15 @@ struct alignas(16) AttachmentGPU {
 	float fixed_point[4];
 };
 
+struct alignas(16) CollisionPrimitiveGPU {
+	int type;
+	int _pad0;
+	int _pad1;
+	int _pad2;
+	float data0[4];
+	float data1[4];
+};
+
 class Simulation
 {
 	friend class AntTweakBarWrapper;
@@ -136,6 +146,10 @@ public:
 	void UpdateAnimation(const int fn);
 	void Update();
 	void Draw(const VBO& vbos);
+	void LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant);
+	bool PrepareCS2RenderBuffers();
+	GLuint CS2RenderPositionBuffer() const;
+	GLuint CS2RenderNormalBuffer() const;
 
 	void GetOverlayChar(char* overlay, unsigned int overlay_length = 255);
 
@@ -317,6 +331,7 @@ protected:
 	// prefetched instructions in linesearch
 	bool m_ls_is_first_iteration;
 	VectorX m_ls_prefetched_gradient;
+	VectorX m_ls_x_plus_tdx;
 	ScalarType m_ls_prefetched_energy;
 
 	// local global method
@@ -363,6 +378,7 @@ protected:
 	Eigen::SimplicialLLT<SparseMatrix, Eigen::Upper> m_lbfgs_H0_solver;
 	VectorX m_lbfgs_last_x;
 	VectorX m_lbfgs_last_gradient;
+	VectorX m_ncg_lbfgs_pk;
 	std::deque<VectorX> m_lbfgs_y_queue;
 	std::deque<VectorX> m_lbfgs_s_queue;
 	QueueLBFGS* m_lbfgs_queue;
@@ -377,6 +393,30 @@ protected:
 	bool m_verbose_show_optimization_time;
 	bool m_verbose_show_energy;
 	bool m_verbose_show_factorization_warning;
+	bool m_profile_logging_enabled;
+	bool m_last_profile_used_cs_ncg;
+	bool m_last_profile_converged;
+	bool m_last_profile_exploded;
+	unsigned int m_last_profile_iterations;
+	ScalarType m_last_profile_front_ms;
+	ScalarType m_last_profile_transfer_ms;
+	ScalarType m_last_profile_cs_y_upload_ms;
+	ScalarType m_last_profile_cs_y_to_x_copy_ms;
+	ScalarType m_last_profile_cs_x_readback_ms;
+	ScalarType m_last_profile_cs_x_readback_wait_ms;
+	ScalarType m_last_profile_cs_x_readback_copy_ms;
+	ScalarType m_last_profile_iteration_ms;
+	ScalarType m_last_profile_optimization_ms;
+	ScalarType m_last_profile_back_ms;
+	ScalarType m_last_profile_update_posvel_ms;
+	ScalarType m_last_profile_position_stats_ms;
+	ScalarType m_last_profile_collision_ms;
+	ScalarType m_last_profile_total_ms;
+	ScalarType m_last_profile_step_size;
+	ScalarType m_last_profile_objective_energy;
+	ScalarType m_last_profile_gradient_norm;
+	ScalarType m_last_profile_max_displacement;
+	ScalarType m_last_profile_max_position;
 
 	// animation for demo
 	bool m_animation_enable_swinging;
@@ -389,23 +429,37 @@ protected:
 	bool m_processing_collision;
 
 	// use compute shader
-	bool use_cs;
+	bool use_cs = true;
 	GLuint gradient_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
-		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader;
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader;
 
 	GLuint gradient_program, energy_program, computeX_program, descent_program, iner_program,
-		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program;
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program;
 
-	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID;
-	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID;
-	bool m_cs_constraint_data_dirty;
+	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
+	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
+	GLuint csPositionID, csStateStatsID;
+	bool m_cs_render_position_valid;
+	bool m_cs_gpu_state_valid;
+	bool m_cs_cpu_state_stale;
+	bool m_cs_skip_cpu_damping_once;
+
+
+	std::vector<float> test_;
 	std::vector<unsigned int> m_cs_vertex_edge_offsets;
 	std::vector<unsigned int> m_cs_vertex_edge_indices;
-	std::vector<AttachmentGPU> m_cs_attachments;
+	std::vector<CollisionPrimitiveGPU> m_cs_collision_primitives;
+	std::vector<ScalarType> m_cs_mass_diagonal;
+	ScalarType m_cs_gradient_norm_sq;
+	ScalarType m_cs_gradient_dot_descent;
+	bool m_cs_edge_buffer_dirty;
+
+	bool li_test = true;
+	
 
 	const char* gradient_source = R"(#version 430
-
+#extension GL_NV_shader_atomic_float : require
 layout( local_size_x = 256 ) in;
 
 layout(std140,binding = 0) uniform params {
@@ -419,16 +473,15 @@ layout(std140,binding = 0) uniform params {
     int gradient_size; // 28
 };
 
-//uniform float m_rest_length;
-//uniform float m_mass_matrix; //  m_mesh->m_mass_matrix
-
-
 struct Edge
 {
     uint m_v1, m_v2;
     uint m_tri1, m_tri2;
     float rest_length;
     int stiffness;
+    int fixed_point;
+	float _pad0;
+    vec4 fixed_;
 };
 
 layout(std430, binding = 0) buffer EdgeBuffer {
@@ -443,36 +496,54 @@ layout(std430, binding = 2) buffer x_posBuffer {
     float x_pos[];
 };
 
-//layout(std430, binding = 3) buffer y {
-//    float m_y[];
-//};
+layout(std430, binding = 10) buffer testBuffer {
+    float test[];
+};
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
 
 
     if(idx < edge_size){
-        Edge e = edges[idx];
+		Edge e = edges[idx];
+		if(idx == 0) {test[0] += 100;}
+        if(e.fixed_point == 1){
 
-        // ï¿½ï¿½È¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
-        uint i = e.m_v1 * 3;
-        uint j = e.m_v2 * 3;
-float res = e.rest_length;
+           
+            uint i = e.m_v1 * 3;
 
-        vec3 x_ij = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]) - vec3(x_pos[j],x_pos[j+1],x_pos[j+2]);
-//        vec3 g_ij = stiffness * (length(x_ij) - m_rest_length) * normalize(x_ij);
+            vec3 x_i = vec3(x_pos[i],x_pos[i+1],x_pos[i+2]);
 
-        vec3 g_ij = e.stiffness * (length(x_ij) - res) * normalize(x_ij);
+            vec3 m_g = e.stiffness * (x_i - vec3(e.fixed_));
 
-        gradient[i] += g_ij.x;
-        gradient[i+1] += g_ij.y;
-        gradient[i+2] += g_ij.z;
+            //gradient.block_vector(m_p0) += m_g;
 
-        gradient[j] -= g_ij.x;
-        gradient[j+1] -= g_ij.y;
-        gradient[j+2] -= g_ij.z;
+            atomicAdd(gradient[i], m_g.x);
+            atomicAdd(gradient[i+1], m_g.y);
+            atomicAdd(gradient[i+2], m_g.z);
 
 
+			test[0] += 1;
+        }
+        else {
+            
+            uint i = e.m_v1 * 3;
+            uint j = e.m_v2 * 3;
+            float res = e.rest_length;
+
+            vec3 x_ij = vec3(x_pos[i], x_pos[i+1], x_pos[i+2]) - vec3(x_pos[j], x_pos[j+1], x_pos[j+2]);
+
+            vec3 g_ij = e.stiffness * (length(x_ij) - res) * normalize(x_ij);
+
+            atomicAdd(gradient[i], g_ij.x);
+            atomicAdd(gradient[i+1], g_ij.y);
+            atomicAdd(gradient[i+2], g_ij.z);
+
+            atomicAdd(gradient[j], -g_ij.x);
+            atomicAdd(gradient[j+1], -g_ij.y);
+            atomicAdd(gradient[j+2], -g_ij.z);
+
+        }
     }
 
 }
@@ -500,6 +571,9 @@ struct Edge
     uint m_tri1, m_tri2;
     float rest_length;
     int stiffness;
+    int fixed_point;
+	float _pad0;
+    vec4 fixed_;
 };
 
 layout(std430, binding = 0) buffer EdgeBuffer {
@@ -569,6 +643,9 @@ struct Edge
     uint m_tri1, m_tri2;
     float rest_length;
     int stiffness;
+    int fixed_point;
+	float _pad0;
+    vec4 fixed_;
 };
 
 layout(std430, binding = 0) buffer EdgeBuffer {
@@ -625,6 +702,9 @@ struct Edge
     uint m_tri1, m_tri2;
     float rest_length;
     int stiffness;
+    int fixed_point;
+	float _pad0;
+    vec4 fixed_;
 };
 
 
@@ -720,6 +800,11 @@ struct Edge
 {
     uint m_v1, m_v2;
     uint m_tri1, m_tri2;
+    float rest_length;
+    int stiffness;
+    int fixed_point;
+	float _pad0;
+    vec4 fixed_;
 };
 
 layout(std430, binding = 2) buffer x_posBuffer {
@@ -847,11 +932,16 @@ layout(std430, binding = 8) buffer y {
     float m_y[];
 };
 
+layout(std430,binding = 7) buffer Descent {
+    float d[];
+};
+
 void main() {
     uint idx = gl_GlobalInvocationID.x;
 
     if(idx < gradient_size){
         gradient[idx] = 1.0 * (x_pos[idx] - m_y[idx]) + m_h * m_h * gradient[idx];
+	
     }
 
 }
@@ -970,7 +1060,7 @@ void main() {
 
     float t = t0 * pow(beta, float(i));
 
-    // å¹¶è¡Œè®¡ç®— E(x + t d)
+    // ²¢ÐÐ¼ÆËã E(x + t d)
     float local_sum = 0.0;
     float temp = 0.0;
     for (uint idx = tid; idx < gradient_size ; idx += gl_WorkGroupSize.x) {
@@ -1007,12 +1097,23 @@ void main() {
 	ParamsUBO comp_params;
 
 
-
+	std::vector<glm::vec3> fixed_points;
+	std::string m_gradient_shader_file;
+	std::string m_energy_shader_file;
+	std::string m_objective_shader_file;
+	std::string m_energy_for_linesearch_shader_file;
+	std::string m_computeX_shader_file;
+	std::string m_descent_shader_file;
+	std::string m_iner_shader_file;
+	std::string m_stats_shader_file;
+	std::string m_collision_resolve_shader_file;
+	std::string m_normal_from_triangles_shader_file;
+	std::string m_cs2_state_shader_file;
 
 
 	VectorX gradient_dir;
 
-
+	
 
 
 
@@ -1042,6 +1143,20 @@ private:
 	void set_source();
 	void set_shader();
 	void Create_SSBO();
+	void syncCSParams();
+	void rebuildCSAdjacency();
+	void uploadCSResourcesIfNeeded();
+	void uploadCSCollisionPrimitives();
+	bool shouldUseCS2GpuState();
+	void initializeCS2GpuStateIfNeeded();
+	bool predictCS2GpuStateY();
+	bool finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite);
+	void syncCS2GpuStateToCPU();
+	void invalidateCS2GpuState();
+	void dispatchCSGradient(bool pure_constraint_only, bool profile_gradient = true);
+	void updateCSStats(bool readback = true);
+	ScalarType readCSStatsFromGPU(bool profile_readback = true);
+	void collisionPostProcessCS(VectorX& x, VectorX& v);
 	ScalarType evaluatePotentialEnergyCS(const VectorX& x);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);

@@ -1,0 +1,34 @@
+# Build outputs
+Debug/
+Release/
+x64/
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.iobj
+*.ipdb
+*.tlog
+*.recipe
+*.Build.CppClean.log
+*.FileListAbsolute.txt
+*.log
+*.zip
+
+# IDE and local user settings
+.idea/
+.vscode/
+.vs/
+*.user
+
+# Generated runtime output
+output/
+
+# Local backup/corrupt folders and files
+GenPD/
+source (2)/
+source_corrupt_*/
+shaders_corrupt_backup_*/
+*-backup-*
+*.bak
+*.corrupt*

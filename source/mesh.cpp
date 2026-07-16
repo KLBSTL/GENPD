@@ -29,7 +29,12 @@
 
 #pragma warning( disable : 4267)
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 #include "mesh.h"
 
 void Mesh::Reset()
@@ -48,6 +53,13 @@ void Mesh::Cleanup()
 	m_colors.clear();
 	m_texcoords.clear();
 	m_triangle_list.clear();
+	m_thread_normal_accum.clear();
+	m_draw_static_buffers_dirty = true;
+	m_draw_position_bytes = 0;
+	m_draw_color_bytes = 0;
+	m_draw_normal_bytes = 0;
+	m_draw_texcoord_bytes = 0;
+	m_draw_index_bytes = 0;
 }
 
 void Mesh::Update()
@@ -63,48 +75,68 @@ void Mesh::Draw(const VBO& vbos, int show_texture)
 
 	unsigned int size = m_vertices_number;
 	unsigned int element_num = m_triangle_list.size();
+	const std::size_t position_bytes = 3 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t color_bytes = 3 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t normal_bytes = 3 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t texcoord_bytes = 2 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t index_bytes = static_cast<std::size_t>(element_num) * sizeof(unsigned int);
+
+	ensureDrawBuffersInitialized();
 
 	// position
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_vbo);
-	glBufferData(GL_ARRAY_BUFFER, 3 * size * sizeof(float), &m_positions[0], GL_DYNAMIC_DRAW);
+	ensureDynamicDrawBuffer(m_draw_vbo, position_bytes, m_draw_position_bytes);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_vbo);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, position_bytes, m_current_positions.data());
 
-	// color
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_cbo);
-	glBufferData(GL_ARRAY_BUFFER, 3 * size * sizeof(float), &m_colors[0], GL_STATIC_DRAW);
 	// normal
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_nbo);
-	glBufferData(GL_ARRAY_BUFFER, 3 * size * sizeof(float), &m_normals[0], GL_DYNAMIC_DRAW);
-	// texture
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_tbo);
-	glBufferData(GL_ARRAY_BUFFER, 2 * size * sizeof(float), &m_texcoords[0], GL_STATIC_DRAW);
+	ensureDynamicDrawBuffer(m_draw_nbo, normal_bytes, m_draw_normal_bytes);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_nbo);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, normal_bytes, &m_normals[0]);
 
-	// indices
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.m_ibo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, element_num * sizeof(unsigned int), &m_triangle_list[0], GL_STATIC_DRAW);
+	if (m_draw_static_buffers_dirty || m_draw_color_bytes != color_bytes)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, m_draw_cbo);
+		glBufferData(GL_ARRAY_BUFFER, color_bytes, &m_colors[0], GL_STATIC_DRAW);
+		m_draw_color_bytes = color_bytes;
+	}
+	if (m_draw_static_buffers_dirty || m_draw_texcoord_bytes != texcoord_bytes)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, m_draw_tbo);
+		glBufferData(GL_ARRAY_BUFFER, texcoord_bytes, &m_texcoords[0], GL_STATIC_DRAW);
+		m_draw_texcoord_bytes = texcoord_bytes;
+	}
+	if (m_draw_static_buffers_dirty || m_draw_index_bytes != index_bytes)
+	{
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_bytes, &m_triangle_list[0], GL_STATIC_DRAW);
+		m_draw_index_bytes = index_bytes;
+	}
+	m_draw_static_buffers_dirty = false;
 
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
 	glEnableVertexAttribArray(2);
 	glEnableVertexAttribArray(3);
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_vbo);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_cbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_cbo);
 	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_nbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_nbo);
 	glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_tbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_tbo);
 	glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
 	glm::mat4 identity = glm::mat4(); // identity matrix
 	glUniformMatrix4fv(vbos.m_uniform_transformation, 1, false, &identity[0][0]);
 
+	glUniform1i(vbos.m_uniform_use_gpu_grid_normal, 0);
 	glUniform1i(vbos.m_uniform_enable_texture, show_texture); // enable/disable texture
 
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.m_ibo);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
 	glDrawElements(GL_TRIANGLES, element_num, GL_UNSIGNED_INT, 0);
 
 	glDisableVertexAttribArray(0);
@@ -121,51 +153,244 @@ void Mesh::Draw(const VBO& vbos, int show_texture)
 
 void Mesh::DrawWireFrame(const VBO& vbos, int line_width)
 {
-	computeNormal();
-
 	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
 	glLineWidth(line_width);
 
 	unsigned int size = m_vertices_number;
 	unsigned int element_num = m_triangle_list.size();
+	const std::size_t position_bytes = 3 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t index_bytes = static_cast<std::size_t>(element_num) * sizeof(unsigned int);
+	ensureDrawBuffersInitialized();
 
 	// position
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_vbo);
-	glBufferData(GL_ARRAY_BUFFER, 3 * size * sizeof(float), &m_positions[0], GL_DYNAMIC_DRAW);
-
-	// color
-	std::vector<glm::vec3> colors;
-	colors.resize(m_positions.size());
-	std::fill(colors.begin(), colors.end(), glm::vec3(0, 0, 0));
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_cbo);
-	glBufferData(GL_ARRAY_BUFFER, 3 * size * sizeof(float), &colors[0], GL_STATIC_DRAW);
+	ensureDynamicDrawBuffer(m_draw_vbo, position_bytes, m_draw_position_bytes);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_vbo);
+	glBufferSubData(GL_ARRAY_BUFFER, 0, position_bytes, m_current_positions.data());
 
 	// indices
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.m_ibo);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, element_num * sizeof(unsigned int), &m_triangle_list[0], GL_STATIC_DRAW);
+	if (m_draw_static_buffers_dirty || m_draw_index_bytes != index_bytes)
+	{
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_bytes, &m_triangle_list[0], GL_STATIC_DRAW);
+		m_draw_index_bytes = index_bytes;
+	}
 
 	glEnableVertexAttribArray(0);
-	glEnableVertexAttribArray(1);
+	glDisableVertexAttribArray(1);
 
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_vbo);
 	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-	glBindBuffer(GL_ARRAY_BUFFER, vbos.m_cbo);
-	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glVertexAttrib3f(1, 0.0f, 0.0f, 0.0f);
 
 	glm::mat4 identity = glm::mat4(); // identity matrix
 	glUniformMatrix4fv(vbos.m_uniform_transformation, 1, false, &identity[0][0]);
 
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.m_ibo);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
 	glDrawElements(GL_TRIANGLES, element_num, GL_UNSIGNED_INT, 0);
 
 	glDisableVertexAttribArray(0);
-	glDisableVertexAttribArray(1);
 
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 
 	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);	
+}
+
+void Mesh::DrawGPUPositionNormal(const VBO& vbos, GLuint position_buffer, GLuint normal_buffer, int show_texture)
+{
+	(void)normal_buffer;
+	if (!glIsBuffer(position_buffer))
+	{
+		Draw(vbos, show_texture);
+		return;
+	}
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+
+	unsigned int size = m_vertices_number;
+	unsigned int element_num = m_triangle_list.size();
+	const std::size_t color_bytes = 3 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t texcoord_bytes = 2 * static_cast<std::size_t>(size) * sizeof(float);
+	const std::size_t index_bytes = static_cast<std::size_t>(element_num) * sizeof(unsigned int);
+
+	ensureDrawBuffersInitialized();
+
+	if (m_draw_static_buffers_dirty || m_draw_color_bytes != color_bytes)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, m_draw_cbo);
+		glBufferData(GL_ARRAY_BUFFER, color_bytes, &m_colors[0], GL_STATIC_DRAW);
+		m_draw_color_bytes = color_bytes;
+	}
+	if (m_draw_static_buffers_dirty || m_draw_texcoord_bytes != texcoord_bytes)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, m_draw_tbo);
+		glBufferData(GL_ARRAY_BUFFER, texcoord_bytes, &m_texcoords[0], GL_STATIC_DRAW);
+		m_draw_texcoord_bytes = texcoord_bytes;
+	}
+	if (m_draw_static_buffers_dirty || m_draw_index_bytes != index_bytes)
+	{
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_bytes, &m_triangle_list[0], GL_STATIC_DRAW);
+		m_draw_index_bytes = index_bytes;
+	}
+	m_draw_static_buffers_dirty = false;
+
+	glEnableVertexAttribArray(0);
+	glEnableVertexAttribArray(1);
+	glEnableVertexAttribArray(2);
+	glEnableVertexAttribArray(3);
+
+	glBindBuffer(GL_ARRAY_BUFFER, position_buffer);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, position_buffer);
+
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_cbo);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
+
+	glDisableVertexAttribArray(2);
+	glVertexAttrib3f(2, 0.0f, 1.0f, 0.0f);
+
+	glBindBuffer(GL_ARRAY_BUFFER, m_draw_tbo);
+	glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 0, 0);
+
+	glm::mat4 identity = glm::mat4();
+	glUniformMatrix4fv(vbos.m_uniform_transformation, 1, false, &identity[0][0]);
+	glUniform1i(vbos.m_uniform_use_gpu_grid_normal, 1);
+	glUniform1ui(vbos.m_uniform_gpu_grid_dim0, static_cast<GLuint>(m_dim[0]));
+	glUniform1ui(vbos.m_uniform_gpu_grid_dim1, static_cast<GLuint>(m_dim[1]));
+	glUniform1i(vbos.m_uniform_enable_texture, show_texture);
+
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+	glDrawElements(GL_TRIANGLES, element_num, GL_UNSIGNED_INT, 0);
+
+	glDisableVertexAttribArray(0);
+	glDisableVertexAttribArray(1);
+	glDisableVertexAttribArray(2);
+	glDisableVertexAttribArray(3);
+	glUniform1i(vbos.m_uniform_use_gpu_grid_normal, 0);
+	glUniform1i(vbos.m_uniform_enable_texture, 0);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
+void Mesh::DrawWireFrameGPUPosition(const VBO& vbos, GLuint position_buffer, int line_width)
+{
+	if (!glIsBuffer(position_buffer))
+	{
+		DrawWireFrame(vbos, line_width);
+		return;
+	}
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+	glLineWidth(line_width);
+
+	unsigned int element_num = m_triangle_list.size();
+	const std::size_t index_bytes = static_cast<std::size_t>(element_num) * sizeof(unsigned int);
+	ensureDrawBuffersInitialized();
+
+	if (m_draw_static_buffers_dirty || m_draw_index_bytes != index_bytes)
+	{
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, index_bytes, &m_triangle_list[0], GL_STATIC_DRAW);
+		m_draw_index_bytes = index_bytes;
+	}
+
+	glEnableVertexAttribArray(0);
+	glDisableVertexAttribArray(1);
+	glDisableVertexAttribArray(2);
+
+	glBindBuffer(GL_ARRAY_BUFFER, position_buffer);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 19, position_buffer);
+	glVertexAttrib3f(1, 0.0f, 0.0f, 0.0f);
+	glVertexAttrib3f(2, 0.0f, 1.0f, 0.0f);
+
+	glm::mat4 identity = glm::mat4();
+	glUniformMatrix4fv(vbos.m_uniform_transformation, 1, false, &identity[0][0]);
+	glUniform1i(vbos.m_uniform_use_gpu_grid_normal, 0);
+
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_draw_ibo);
+	glDrawElements(GL_TRIANGLES, element_num, GL_UNSIGNED_INT, 0);
+
+	glDisableVertexAttribArray(0);
+
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+}
+
+void Mesh::ensureDrawBuffersInitialized()
+{
+	if (!glIsBuffer(m_draw_vbo))
+	{
+		glGenBuffers(1, &m_draw_vbo);
+	}
+	if (!glIsBuffer(m_draw_cbo))
+	{
+		glGenBuffers(1, &m_draw_cbo);
+	}
+	if (!glIsBuffer(m_draw_nbo))
+	{
+		glGenBuffers(1, &m_draw_nbo);
+	}
+	if (!glIsBuffer(m_draw_tbo))
+	{
+		glGenBuffers(1, &m_draw_tbo);
+	}
+	if (!glIsBuffer(m_draw_ibo))
+	{
+		glGenBuffers(1, &m_draw_ibo);
+	}
+}
+
+void Mesh::releaseDrawBuffers()
+{
+	if (glIsBuffer(m_draw_vbo))
+	{
+		glDeleteBuffers(1, &m_draw_vbo);
+	}
+	if (glIsBuffer(m_draw_cbo))
+	{
+		glDeleteBuffers(1, &m_draw_cbo);
+	}
+	if (glIsBuffer(m_draw_nbo))
+	{
+		glDeleteBuffers(1, &m_draw_nbo);
+	}
+	if (glIsBuffer(m_draw_tbo))
+	{
+		glDeleteBuffers(1, &m_draw_tbo);
+	}
+	if (glIsBuffer(m_draw_ibo))
+	{
+		glDeleteBuffers(1, &m_draw_ibo);
+	}
+
+	m_draw_vbo = 0;
+	m_draw_cbo = 0;
+	m_draw_nbo = 0;
+	m_draw_tbo = 0;
+	m_draw_ibo = 0;
+	m_draw_position_bytes = 0;
+	m_draw_color_bytes = 0;
+	m_draw_normal_bytes = 0;
+	m_draw_texcoord_bytes = 0;
+	m_draw_index_bytes = 0;
+	m_draw_static_buffers_dirty = true;
+}
+
+void Mesh::ensureDynamicDrawBuffer(GLuint buffer, std::size_t required_bytes, std::size_t& tracked_bytes)
+{
+	if (tracked_bytes != required_bytes)
+	{
+		glBindBuffer(GL_ARRAY_BUFFER, buffer);
+		glBufferData(GL_ARRAY_BUFFER, required_bytes, NULL, GL_DYNAMIC_DRAW);
+		tracked_bytes = required_bytes;
+	}
 }
 
 void Mesh::ExportToOBJ(const char* filename)
@@ -225,40 +450,95 @@ bool Mesh::ImportFromOBJ(const char* filename)
 
 void Mesh::computeNormal()
 {
-	// reset all the normal.
-	glm::vec3 zero(0.0);
-	for(std::vector<glm::vec3>::iterator n = m_normals.begin(); n != m_normals.end(); ++n)
+	const unsigned int vertex_num = m_vertices_number;
+	const unsigned int triangle_num = m_triangle_list.size() / 3;
+	if (vertex_num == 0)
 	{
-		*n = zero;
+		return;
 	}
-	// calculate normal for each individual triangle
-	unsigned int triangle_num = m_triangle_list.size() / 3;
-	unsigned int id0, id1, id2;
-	EigenVector3 p0, p1, p2;
-	EigenVector3 normal;
-	for(unsigned int i = 0; i < triangle_num; ++i)
+
+	if (triangle_num == 0)
 	{
-		id0 = m_triangle_list[3 * i];
-		id1 = m_triangle_list[3 * i + 1];
-		id2 = m_triangle_list[3 * i + 2];
-
-		p0 = m_current_positions.block_vector(id0);
-		p1 = m_current_positions.block_vector(id1);
-		p2 = m_current_positions.block_vector(id2);
-
-		normal = (p1-p0).cross(p2-p1);
-		normal.normalize();
-		glm::vec3 glm_normal = glm::vec3(normal[0], normal[1], normal[2]);
-
-		m_normals[id0] += glm_normal;
-		m_normals[id1] += glm_normal;
-		m_normals[id2] += glm_normal;
+		std::fill(m_normals.begin(), m_normals.end(), glm::vec3(0.0f));
+		return;
 	}
-	// re-normalize all the normals.
-	for(std::vector<glm::vec3>::iterator n = m_normals.begin(); n != m_normals.end(); ++n)
+
+	int thread_count = 1;
+#ifdef _OPENMP
+	thread_count = std::max(1, omp_get_max_threads());
+#endif
+	const std::size_t workspace_size = static_cast<std::size_t>(thread_count) * vertex_num;
+	if (m_thread_normal_accum.size() != workspace_size)
 	{
-		if (glm::length(*n) > EPSILON) // skip if norm is a zero vector
-			*n = glm::normalize(*n);
+		m_thread_normal_accum.assign(workspace_size, glm::vec3(0.0f));
+	}
+	else
+	{
+		std::fill(m_thread_normal_accum.begin(), m_thread_normal_accum.end(), glm::vec3(0.0f));
+	}
+
+#ifdef _OPENMP
+#pragma omp parallel num_threads(thread_count)
+#endif
+	{
+		int thread_id = 0;
+#ifdef _OPENMP
+		thread_id = omp_get_thread_num();
+#endif
+		glm::vec3* local_normals = m_thread_normal_accum.data() + static_cast<std::size_t>(thread_id) * vertex_num;
+
+		EigenVector3 p0, p1, p2;
+		EigenVector3 normal;
+		unsigned int id0, id1, id2;
+
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+		for (int i = 0; i < static_cast<int>(triangle_num); ++i)
+		{
+			id0 = m_triangle_list[3 * i];
+			id1 = m_triangle_list[3 * i + 1];
+			id2 = m_triangle_list[3 * i + 2];
+
+			p0 = m_current_positions.block_vector(id0);
+			p1 = m_current_positions.block_vector(id1);
+			p2 = m_current_positions.block_vector(id2);
+
+			normal = (p1 - p0).cross(p2 - p1);
+			const ScalarType normal_norm = normal.norm();
+			if (normal_norm <= EPSILON)
+			{
+				continue;
+			}
+
+			normal /= normal_norm;
+			const glm::vec3 glm_normal(static_cast<float>(normal[0]), static_cast<float>(normal[1]), static_cast<float>(normal[2]));
+			local_normals[id0] += glm_normal;
+			local_normals[id1] += glm_normal;
+			local_normals[id2] += glm_normal;
+		}
+	}
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+	for (int i = 0; i < static_cast<int>(vertex_num); ++i)
+	{
+		glm::vec3 normal_sum(0.0f);
+		for (int thread_id = 0; thread_id < thread_count; ++thread_id)
+		{
+			normal_sum += m_thread_normal_accum[static_cast<std::size_t>(thread_id) * vertex_num + i];
+		}
+
+		const float normal_sq_norm = glm::dot(normal_sum, normal_sum);
+		if (normal_sq_norm > static_cast<float>(EPSILON * EPSILON))
+		{
+			m_normals[i] = normal_sum / std::sqrt(normal_sq_norm);
+		}
+		else
+		{
+			m_normals[i] = glm::vec3(0.0f);
+		}
 	}
 }
 
