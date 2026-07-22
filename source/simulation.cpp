@@ -1793,17 +1793,17 @@ void Simulation::Draw(const VBO& vbos)
 	}
 }
 
-void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride)
+void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride, bool enable_quality_metrics)
 {
     m_reference_export_dir = reference_export_dir;
     m_quality_reference_dir = quality_reference_dir;
     m_quality_checkpoint_stride = std::max(1u, checkpoint_stride);
-    m_quality_metrics_enabled = !m_reference_export_dir.empty() || !m_quality_reference_dir.empty();
+    m_quality_metrics_enabled = enable_quality_metrics || !m_reference_export_dir.empty() || !m_quality_reference_dir.empty();
     if (!m_reference_export_dir.empty() && !GenPDEnsureDirectory(m_reference_export_dir))
     {
         std::cerr << "Warning: cannot create reference checkpoint directory: " << m_reference_export_dir << std::endl;
         m_reference_export_dir.clear();
-        m_quality_metrics_enabled = !m_quality_reference_dir.empty();
+        m_quality_metrics_enabled = enable_quality_metrics || !m_quality_reference_dir.empty();
     }
 }
 

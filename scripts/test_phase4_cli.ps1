@@ -17,15 +17,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 @(
-    '--iterations-per-frame N',
-    '--reference-export-dir PATH',
-    '--quality-reference-dir PATH',
-    '--quality-checkpoint-stride N',
-    '--quality-metrics'
+    '--timestep FLOAT',
+    '--stretch-stiffness FLOAT',
+    '--bending-stiffness FLOAT',
+    '--cloth-dimension N',
+    '--scene PATH'
 ) | ForEach-Object {
     if ($help -notmatch [regex]::Escape($_)) {
-        throw "Missing quality experiment option in --help: $_"
+        throw "Missing Phase 4 option in --help: $_"
     }
 }
 
-Write-Output 'Quality metrics CLI contract passed.'
+Write-Output 'Phase 4 CLI contract passed.'

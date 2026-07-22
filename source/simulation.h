@@ -147,7 +147,7 @@ public:
 	void Update();
 	void Draw(const VBO& vbos);
 	void LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant);
-void ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride);
+void ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride, bool enable_quality_metrics);
 	bool PrepareCS2RenderBuffers();
 	GLuint CS2RenderPositionBuffer() const;
 	GLuint CS2RenderNormalBuffer() const;
@@ -235,6 +235,13 @@ void ConfigureQualityMetrics(const std::string& reference_export_dir, const std:
 	inline void SetScene(Scene* scene) { m_scene = scene; }
 	inline void SetStepMode(bool step_mode) { m_step_mode = step_mode; }
 	inline ScalarType Timestep() { return m_h; }
+	inline void SetTimestep(ScalarType timestep) { if (timestep > 0) { m_h = timestep; } }
+	inline void SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending)
+	{
+		if (stretch > 0) { m_stiffness_stretch = stretch; }
+		if (bending > 0) { m_stiffness_bending = bending; }
+		if (m_stiffness_auto_laplacian_stiffness) { m_stiffness_laplacian = 2 * m_stiffness_stretch + m_stiffness_bending; }
+	}
 inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
 inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
 

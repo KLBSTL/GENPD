@@ -82,13 +82,15 @@ baseline tag：`baseline-20260722` -> `8433064`
 
 ## Phase 4：稳定性与场景矩阵
 
-- [ ] 扫描 `dt × stiffness` 并输出稳定性 CSV。
-- [ ] 生成稳定性热图。
-- [ ] 加入运动障碍物场景。
-- [ ] 加入不同网格分辨率。
-- [ ] 加入不同材质/刚度配置。
-- [ ] 增加更多约束类型时同步说明适用范围。
-- [ ] 若未实现自碰撞，论文明确限定为外部/运动障碍物接触和当前约束集合。
+- [x] 扫描 `dt × stiffness` 并输出稳定性 CSV：`scripts/run_stability_sweep.ps1`。
+- [x] 生成稳定性热图：`scripts/plot_stability_heatmap.ps1` 生成 SVG。
+- [x] 加入运动障碍物场景：`scenes/moving_sphere_cloth.xml`。
+- [x] 加入不同网格分辨率：`--cloth-dimension N` 只覆盖本次运行。
+- [x] 加入不同材质/刚度配置：`--stretch-stiffness FLOAT` 和 `--bending-stiffness FLOAT` 只覆盖本次运行。
+- [x] 增加更多约束类型时同步说明适用范围：当前质量能量/应变仍只覆盖 `Mesh::my_edge` 的 spring/attachment 表示。
+- [x] 若未实现自碰撞，论文明确限定为外部/运动障碍物接触和当前约束集合。详见 `docs/experiments/phase4-stability-and-scenes.md`。
+
+Phase 4 的代码和 smoke run 已完成；正式论文表格仍应从固定 commit 的完整扫描结果生成，不能把 smoke run 当作论文数据。
 
 ## Phase 5：线搜索实验与 claim audit
 

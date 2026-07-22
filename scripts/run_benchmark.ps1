@@ -9,6 +9,7 @@ param(
     [string]$ReferenceExportDir = '',
     [string]$QualityReferenceDir = '',
     [int]$QualityCheckpointStride = 1,
+    [switch]$QualityMetrics,
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
@@ -102,6 +103,7 @@ if ($ProfileGpuQueries) { $appArgs += '--profile-gpu-queries' }
 if ($IterationsPerFrame -gt 0) { $appArgs += @('--iterations-per-frame', $IterationsPerFrame) }
 if ($ReferenceExportDir -ne '') { $appArgs += @('--reference-export-dir', [System.IO.Path]::GetFullPath($ReferenceExportDir)) }
 if ($QualityReferenceDir -ne '') { $appArgs += @('--quality-reference-dir', [System.IO.Path]::GetFullPath($QualityReferenceDir)) }
+if ($QualityMetrics) { $appArgs += '--quality-metrics' }
 if ($QualityCheckpointStride -gt 0 -and ($ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '')) {
     $appArgs += @('--quality-checkpoint-stride', $QualityCheckpointStride)
 }
@@ -125,6 +127,6 @@ if ($exitCode -ne 0) {
 Write-Host "Profile CSV: $(Join-Path $OutputDir 'frame_profile.csv')"
 Write-Host "Experiment profile CSV: $(Join-Path $OutputDir 'frame_profile_experiment.csv')"
 Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"
-if ($ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
+if ($QualityMetrics -or $ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
     Write-Host "Quality metrics: $(Join-Path $OutputDir 'quality_metrics.csv')"
 }

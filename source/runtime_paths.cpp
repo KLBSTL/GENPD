@@ -426,7 +426,15 @@ void GenPDWriteRunMetadata(
 	out << "    \"iterations_per_frame\": \"" << JsonEscape(EnvValue("GENPD_ITERATIONS_PER_FRAME")) << "\",\n";
 	out << "    \"reference_export_dir\": \"" << JsonEscape(EnvValue("GENPD_REFERENCE_EXPORT_DIR")) << "\",\n";
 	out << "    \"reference_dir\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_REFERENCE_DIR")) << "\",\n";
-	out << "    \"checkpoint_stride\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_CHECKPOINT_STRIDE")) << "\"\n";
+	out << "    \"checkpoint_stride\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_CHECKPOINT_STRIDE")) << "\",\n";
+	out << "    \"metrics_enabled\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_METRICS")) << "\"\n";
+	out << "  },\n";
+	out << "  \"experiment_overrides\": {\n";
+	out << "    \"timestep\": \"" << JsonEscape(EnvValue("GENPD_TIMESTEP_OVERRIDE")) << "\",\n";
+	out << "    \"stretch_stiffness\": \"" << JsonEscape(EnvValue("GENPD_STRETCH_STIFFNESS_OVERRIDE")) << "\",\n";
+	out << "    \"bending_stiffness\": \"" << JsonEscape(EnvValue("GENPD_BENDING_STIFFNESS_OVERRIDE")) << "\",\n";
+	out << "    \"cloth_dimension\": \"" << JsonEscape(EnvValue("GENPD_CLOTH_DIMENSION_OVERRIDE")) << "\",\n";
+	out << "    \"scene\": \"" << JsonEscape(EnvValue("GENPD_SCENE")) << "\"\n";
 	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";

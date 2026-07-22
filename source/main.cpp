@@ -125,6 +125,12 @@ int g_cli_iterations_per_frame = 0;
 std::string g_cli_reference_export_dir;
 std::string g_cli_quality_reference_dir;
 int g_cli_quality_checkpoint_stride = 1;
+bool g_cli_quality_metrics = false;
+ScalarType g_cli_timestep = static_cast<ScalarType>(-1);
+ScalarType g_cli_stretch_stiffness = static_cast<ScalarType>(-1);
+ScalarType g_cli_bending_stiffness = static_cast<ScalarType>(-1);
+int g_cli_cloth_dimension = 0;
+std::string g_cli_scene;
 bool g_cli_restore_iterations_per_frame = false;
 unsigned int g_cli_original_iterations_per_frame = 0;
 bool g_cli_profile_gpu_queries = false;
@@ -259,12 +265,28 @@ g_simulation->SetIterationsPerFrame(static_cast<unsigned int>(g_cli_iterations_p
 }
 const std::string reference_export_dir = g_cli_reference_export_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_reference_export_dir);
 const std::string quality_reference_dir = g_cli_quality_reference_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_quality_reference_dir);
-g_simulation->ConfigureQualityMetrics(reference_export_dir, quality_reference_dir, static_cast<unsigned int>(g_cli_quality_checkpoint_stride));
+g_simulation->ConfigureQualityMetrics(
+    reference_export_dir,
+    quality_reference_dir,
+    static_cast<unsigned int>(g_cli_quality_checkpoint_stride),
+    g_cli_quality_metrics);
 const std::string iterations_per_frame_metadata = std::to_string(g_simulation->IterationsPerFrame());
+const std::string selected_scene = GenPDResolveProjectPath(g_cli_scene.empty() ? std::string(DEFAULT_SCENE_FILE) : g_cli_scene);
+const std::string timestep_metadata = g_cli_timestep > 0 ? std::to_string(g_cli_timestep) : std::string();
+const std::string stretch_metadata = g_cli_stretch_stiffness > 0 ? std::to_string(g_cli_stretch_stiffness) : std::string();
+const std::string bending_metadata = g_cli_bending_stiffness > 0 ? std::to_string(g_cli_bending_stiffness) : std::string();
+const std::string cloth_dimension_metadata = g_cli_cloth_dimension > 0 ? std::to_string(g_cli_cloth_dimension) : std::string();
+const bool quality_metrics_enabled = g_cli_quality_metrics || !reference_export_dir.empty() || !quality_reference_dir.empty();
 _putenv_s("GENPD_ITERATIONS_PER_FRAME", iterations_per_frame_metadata.c_str());
 _putenv_s("GENPD_REFERENCE_EXPORT_DIR", reference_export_dir.c_str());
 _putenv_s("GENPD_QUALITY_REFERENCE_DIR", quality_reference_dir.c_str());
 _putenv_s("GENPD_QUALITY_CHECKPOINT_STRIDE", std::to_string(g_cli_quality_checkpoint_stride).c_str());
+_putenv_s("GENPD_QUALITY_METRICS", quality_metrics_enabled ? "1" : "0");
+_putenv_s("GENPD_TIMESTEP_OVERRIDE", timestep_metadata.c_str());
+_putenv_s("GENPD_STRETCH_STIFFNESS_OVERRIDE", stretch_metadata.c_str());
+_putenv_s("GENPD_BENDING_STIFFNESS_OVERRIDE", bending_metadata.c_str());
+_putenv_s("GENPD_CLOTH_DIMENSION_OVERRIDE", cloth_dimension_metadata.c_str());
+_putenv_s("GENPD_SCENE", selected_scene.c_str());
 glutReshapeWindow(g_screen_width, g_screen_height);
 	GenPDWriteRunMetadata(
 		argc,
@@ -735,6 +757,20 @@ int parse_nonnegative_int(const char* value, const int fallback)
 	return parsed_value >= 0 ? parsed_value : fallback;
 }
 
+ScalarType parse_positive_scalar(const char* value, const ScalarType fallback)
+{
+	if (!value)
+	{
+		return fallback;
+	}
+
+	char* end = NULL;
+	const double parsed_value = std::strtod(value, &end);
+	return end != value && end && *end == '\0' && std::isfinite(parsed_value) && parsed_value > 0.0
+		? static_cast<ScalarType>(parsed_value)
+		: fallback;
+}
+
 void parse_command_line(int argc, char** argv)
 {
 	for (int i = 1; i < argc; ++i)
@@ -817,6 +853,30 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_quality_checkpoint_stride = parse_positive_int(argv[++i], g_cli_quality_checkpoint_stride);
         }
+        else if (arg == "--quality-metrics")
+        {
+            g_cli_quality_metrics = true;
+        }
+        else if (arg == "--timestep" && i + 1 < argc)
+        {
+            g_cli_timestep = parse_positive_scalar(argv[++i], g_cli_timestep);
+        }
+        else if (arg == "--stretch-stiffness" && i + 1 < argc)
+        {
+            g_cli_stretch_stiffness = parse_positive_scalar(argv[++i], g_cli_stretch_stiffness);
+        }
+        else if (arg == "--bending-stiffness" && i + 1 < argc)
+        {
+            g_cli_bending_stiffness = parse_positive_scalar(argv[++i], g_cli_bending_stiffness);
+        }
+        else if (arg == "--cloth-dimension" && i + 1 < argc)
+        {
+            g_cli_cloth_dimension = parse_positive_int(argv[++i], g_cli_cloth_dimension);
+        }
+        else if (arg == "--scene" && i + 1 < argc)
+        {
+            g_cli_scene = argv[++i];
+        }
         else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
@@ -844,6 +904,12 @@ void parse_command_line(int argc, char** argv)
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
                 << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"
                 << "  --quality-checkpoint-stride N  Export/check checkpoints every N frames.\n"
+                << "  --quality-metrics           Record quality metrics without a reference checkpoint.\n"
+                << "  --timestep FLOAT            Override the simulation timestep for this run.\n"
+                << "  --stretch-stiffness FLOAT   Override cloth stretch stiffness for this run.\n"
+                << "  --bending-stiffness FLOAT   Override cloth bending stiffness for this run.\n"
+                << "  --cloth-dimension N         Override square cloth resolution for this run.\n"
+                << "  --scene PATH                Load a scene XML file relative to project root.\n"
 				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent.\n"
@@ -1098,6 +1164,25 @@ void mouse_over(int x, int y)
 	glutPostRedisplay();
 }
 
+void apply_cli_simulation_overrides()
+{
+	if (!g_mesh || !g_simulation)
+	{
+		return;
+	}
+
+	if (g_cli_cloth_dimension > 0)
+	{
+		g_mesh->m_dim[0] = static_cast<unsigned int>(g_cli_cloth_dimension);
+		g_mesh->m_dim[1] = static_cast<unsigned int>(g_cli_cloth_dimension);
+	}
+	if (g_cli_timestep > 0)
+	{
+		g_simulation->SetTimestep(g_cli_timestep);
+	}
+	g_simulation->SetExperimentMaterialStiffness(g_cli_stretch_stiffness, g_cli_bending_stiffness);
+}
+
 void init()
 {
     // glew init
@@ -1141,7 +1226,9 @@ if (g_benchmark_mode)
 
     // scene init
     fprintf(stdout, "Initializing scene...\n");
-    g_scene = new Scene(DEFAULT_SCENE_FILE);
+    const std::string requested_scene = g_cli_scene.empty() ? std::string(DEFAULT_SCENE_FILE) : g_cli_scene;
+    const std::string scene_path = GenPDResolveProjectPath(requested_scene);
+    g_scene = new Scene(scene_path.c_str());
 
     // mesh init
     fprintf(stdout, "Initializing mesh...\n");
@@ -1249,6 +1336,7 @@ void TW_CALL reset_simulation(void*)
         break;
     }
 	g_config_bar->LoadSettings();
+	apply_cli_simulation_overrides();
     g_mesh->Reset();
 
     // reset simulation
