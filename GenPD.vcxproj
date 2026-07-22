@@ -35,6 +35,7 @@
     <ClCompile Include="source\matlab_debugger.cpp" />
     <ClCompile Include="source\mesh.cpp" />
     <ClCompile Include="source\primitive.cpp" />
+    <ClCompile Include="source\runtime_paths.cpp" />
     <ClCompile Include="source\scene.cpp" />
     <ClCompile Include="source\selection_tool.cpp" />
     <ClCompile Include="source\simulation.cpp" />
@@ -60,6 +61,7 @@
     <ClInclude Include="source\mesh.h" />
     <ClInclude Include="source\opengl_headers.h" />
     <ClInclude Include="source\primitive.h" />
+    <ClInclude Include="source\runtime_paths.h" />
     <ClInclude Include="source\scene.h" />
     <ClInclude Include="source\selection_tool.h" />
     <ClInclude Include="source\simulation.h" />
@@ -195,9 +197,8 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <OpenMPSupport>true</OpenMPSupport>
-      <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalOptions>
-      </AdditionalOptions>
+      <MultiProcessorCompilation>false</MultiProcessorCompilation>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
       <AdditionalIncludeDirectories>\source;\source\framework;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>

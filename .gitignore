@@ -23,6 +23,10 @@ x64/
 
 # Generated runtime output
 output/
+results/
+*.nsys-rep
+*.ncu-rep
+*.sqlite
 
 # Local backup/corrupt folders and files
 GenPD/

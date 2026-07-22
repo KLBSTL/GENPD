@@ -43,6 +43,7 @@
 #include "timer_wrapper.h"
 #include "stb_image_write.h"
 #include "glsl_wrapper.h"
+#include "runtime_paths.h"
 #include "AntTweakBar.h"
 #include "anttweakbar_wrapper.h"
 #include "camera.h"
@@ -114,6 +115,11 @@ bool g_benchmark_disable_vsync = false;
 bool g_benchmark_finish_after_display = false;
 int g_benchmark_frames = 300;
 int g_benchmark_warmup_frames = 30;
+std::string g_cli_project_root;
+std::string g_cli_output_dir;
+std::string g_cli_run_label;
+bool g_cli_profile_gpu_queries = false;
+bool g_cli_print_paths = false;
 
 //----------glut function handlers-----------//
 void resize(int, int);
@@ -160,7 +166,7 @@ void init(void);
 void cleanup(void);
 void draw_overlay(void);
 void grab_screen(void);
-void grab_screen(char* filename);
+void grab_screen(const char* filename);
 
 //#include "src\plugins\BlockMethods.h"
 
@@ -196,6 +202,13 @@ int main(int argc, char ** argv)
 {
 	//test();
 	parse_command_line(argc, argv);
+	GenPDInitializeRuntimePaths(
+		argc > 0 ? argv[0] : NULL,
+		g_cli_project_root,
+		g_cli_output_dir,
+		g_cli_run_label,
+		g_cli_profile_gpu_queries,
+		g_cli_print_paths);
 
     // gl init
     glutInit(&argc, argv);
@@ -214,6 +227,20 @@ int main(int argc, char ** argv)
     // user init
     init();
 	glutReshapeWindow(g_screen_width, g_screen_height);
+	GenPDWriteRunMetadata(
+		argc,
+		argv,
+		g_benchmark_mode,
+		g_benchmark_frames,
+		g_benchmark_warmup_frames,
+		g_benchmark_no_render,
+		g_benchmark_uncapped,
+		g_benchmark_sync_gpu,
+		g_benchmark_disable_vsync,
+		g_benchmark_hide_window,
+		reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+		reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+		reinterpret_cast<const char*>(glGetString(GL_VERSION)));
 	if (g_benchmark_mode)
 	{
 		g_pause = false;
@@ -277,7 +304,7 @@ void finish_display_frame(void)
 	if (g_benchmark_finish_after_display)
 	{
 		std::cout << "Benchmark complete after " << g_current_frame
-			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+			<< " frames. Profile: " << GenPDResolveOutputPath("frame_profile.csv") << std::endl;
 		cleanup();
 		exit(EXIT_SUCCESS);
 	}
@@ -365,19 +392,24 @@ void timeout(int value)
 		// grab screen
 		if (g_record)
 		{
-			char cap_filename[256];
-			sprintf_s(cap_filename, 256, "output/screenshots/ScreenCap%04d.png", g_current_frame);
-			grab_screen(cap_filename);
+			char cap_name[64];
+			sprintf_s(cap_name, 64, "screenshots\\ScreenCap%04d.png", g_current_frame);
+			const std::string cap_filename = GenPDResolveOutputPath(cap_name);
+			grab_screen(cap_filename.c_str());
 
 			if (g_export_obj)
 			{
-				char mesh_filename[256];
-				sprintf_s(mesh_filename, 256, "output/mesh/Mesh%04d.obj", g_current_frame);
-				g_mesh->ExportToOBJ(mesh_filename);
+				char mesh_name[64];
+				sprintf_s(mesh_name, 64, "mesh\\Mesh%04d.obj", g_current_frame);
+				const std::string mesh_filename = GenPDResolveOutputPath(mesh_name);
+				GenPDEnsureDirectoryForFile(mesh_filename);
+				g_mesh->ExportToOBJ(mesh_filename.c_str());
 
-				char handle_filename[256];
-				sprintf_s(handle_filename, 256, "output/handles/Handle%04d.obj", g_current_frame);
-				g_simulation->SaveAttachmentConstraint(handle_filename);
+				char handle_name[64];
+				sprintf_s(handle_name, 64, "handles\\Handle%04d.obj", g_current_frame);
+				const std::string handle_filename = GenPDResolveOutputPath(handle_name);
+				GenPDEnsureDirectoryForFile(handle_filename);
+				g_simulation->SaveAttachmentConstraint(handle_filename.c_str());
 			}
 		}
 
@@ -592,10 +624,17 @@ void key_press(unsigned char key, int x, int y) {
 			break;
 		case 'g':
 		case 'G':
-			grab_screen(DEFAULT_SCREEN_SHOT_FILE);
-			g_mesh->ExportToOBJ(DEFAULT_OUTPUT_OBJ_FILE);
-			g_simulation->SaveAttachmentConstraint(DEFAULT_OUTPUT_ATTACHMENT_OBJ_FILE);
+		{
+			const std::string screenshot_path = GenPDResolveOutputPath("ScreenShot.png");
+			const std::string mesh_path = GenPDResolveOutputPath("mesh.obj");
+			const std::string handles_path = GenPDResolveOutputPath("handles.obj");
+			grab_screen(screenshot_path.c_str());
+			GenPDEnsureDirectoryForFile(mesh_path);
+			g_mesh->ExportToOBJ(mesh_path.c_str());
+			GenPDEnsureDirectoryForFile(handles_path);
+			g_simulation->SaveAttachmentConstraint(handles_path.c_str());
 			break;
+		}
 		case 'a':
 		case 'A':
 			g_mesh->Update();
@@ -707,6 +746,26 @@ void parse_command_line(int argc, char** argv)
 			g_benchmark_disable_vsync = true;
 			g_benchmark_mode = true;
 		}
+		else if (arg == "--project-root" && i + 1 < argc)
+		{
+			g_cli_project_root = argv[++i];
+		}
+		else if (arg == "--output-dir" && i + 1 < argc)
+		{
+			g_cli_output_dir = argv[++i];
+		}
+		else if (arg == "--run-label" && i + 1 < argc)
+		{
+			g_cli_run_label = argv[++i];
+		}
+		else if (arg == "--profile-gpu-queries")
+		{
+			g_cli_profile_gpu_queries = true;
+		}
+		else if (arg == "--print-paths")
+		{
+			g_cli_print_paths = true;
+		}
 		else if (arg == "--help" || arg == "-h")
 		{
 			std::cout << "GenPD options:\n"
@@ -718,6 +777,11 @@ void parse_command_line(int argc, char** argv)
 				<< "  --uncapped                  Benchmark without the 30 FPS timer cap.\n"
 				<< "  --sync-gpu                  Call glFinish after benchmark swap buffers.\n"
 				<< "  --disable-vsync             Try to disable WGL swap interval for benchmark.\n"
+				<< "  --project-root PATH         Resolve config/shaders/textures from this GenPD root.\n"
+				<< "  --output-dir PATH           Write benchmark/profile outputs to this directory.\n"
+				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
+				<< "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+				<< "  --print-paths               Print resolved project/output/executable paths.\n"
 				<< "  --benchmark-swing-attachments\n"
 				<< "                              Move attachment constraints during benchmark.\n";
 			exit(EXIT_SUCCESS);
@@ -741,7 +805,7 @@ void maybe_finish_benchmark(void)
 		}
 
 		std::cout << "Benchmark complete after " << g_current_frame
-			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+			<< " frames. Profile: " << GenPDResolveOutputPath("frame_profile.csv") << std::endl;
 		cleanup();
 		exit(EXIT_SUCCESS);
 	}
@@ -1170,12 +1234,13 @@ void TW_CALL step_through(void*)
 
 void grab_screen(void)
 {
-    char anim_filename[256];
-    sprintf_s(anim_filename, 256, "output/Simulation%04d.png", g_current_frame);
-	grab_screen(anim_filename);
+	char anim_name[64];
+	sprintf_s(anim_name, 64, "Simulation%04d.png", g_current_frame);
+	const std::string anim_filename = GenPDResolveOutputPath(anim_name);
+	grab_screen(anim_filename.c_str());
 }
 
-void grab_screen(char* filename)
+void grab_screen(const char* filename)
 {
 	unsigned char* bitmapData = new unsigned char[3 * g_screen_width * g_screen_height];
 
@@ -1185,6 +1250,7 @@ void grab_screen(char* filename)
             bitmapData + (g_screen_width * 3 * ((g_screen_height - 1) - i)));
     }
 
+	GenPDEnsureDirectoryForFile(filename);
     stbi_write_png(filename, g_screen_width, g_screen_height, 3, bitmapData, g_screen_width * 3);
 
     delete [] bitmapData;

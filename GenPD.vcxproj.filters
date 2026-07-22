@@ -134,6 +134,9 @@
     <ClCompile Include="source\primitive.cpp">
       <Filter>Source Files\framework\scene</Filter>
     </ClCompile>
+    <ClCompile Include="source\runtime_paths.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="source\scene.cpp">
       <Filter>Source Files\framework\scene</Filter>
     </ClCompile>
@@ -231,6 +234,9 @@
     </ClInclude>
     <ClInclude Include="source\primitive.h">
       <Filter>Source Files\framework\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="source\runtime_paths.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="source\scene.h">
       <Filter>Source Files\framework\scene</Filter>

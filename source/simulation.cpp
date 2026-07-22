@@ -40,6 +40,7 @@
 
 #include "simulation.h"
 #include "timer_wrapper.h"
+#include "runtime_paths.h"
 
 #ifdef ENABLE_MATLAB_DEBUGGING
 #include "matlab_debugger.h"
@@ -202,6 +203,28 @@ namespace
 		pending = true;
 	}
 
+	struct ScopedCSDebugGroup
+	{
+		bool active;
+
+		ScopedCSDebugGroup(const char* label)
+			: active(false)
+		{
+			if (GenPDProfileGpuQueriesEnabled() && GLEW_KHR_debug)
+			{
+				glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, label);
+				active = true;
+			}
+		}
+
+		~ScopedCSDebugGroup()
+		{
+			if (active)
+			{
+				glPopDebugGroup();
+			}
+		}
+	};
 	ScalarType ConsumeCSGpuTimerMs(GLuint query, bool& pending)
 	{
 		if (!pending || query == 0)
@@ -875,6 +898,7 @@ void Simulation::uploadCSCollisionPrimitives()
 
 void Simulation::dispatchCSGradient(bool pure_constraint_only, bool profile_gradient_query)
 {
+	ScopedCSDebugGroup debug_group(pure_constraint_only ? "GenPD gradient constraint-only" : "GenPD gradient gather fusion");
 	if (!use_cs || !m_mesh)
 	{
 		return;
@@ -899,7 +923,7 @@ void Simulation::dispatchCSGradient(bool pure_constraint_only, bool profile_grad
 	}
 	glUniform1i(pure_constraint_location, pure_constraint_only ? 1 : 0);
 	glUniform1i(write_stats_location, pure_constraint_only ? 0 : 1);
-	const bool profile_gradient = profile_gradient_query && !pure_constraint_only;
+	const bool profile_gradient = (profile_gradient_query || GenPDProfileGpuQueriesEnabled()) && !pure_constraint_only;
 	if (profile_gradient)
 	{
 		BeginCSGpuTimer(g_cs_profile_gradient_query);
@@ -936,6 +960,7 @@ ScalarType Simulation::readCSStatsFromGPU(bool profile_readback)
 
 void Simulation::updateCSStats(bool readback)
 {
+	ScopedCSDebugGroup debug_group("GenPD stats reduction");
 	if (!use_cs || !m_mesh)
 	{
 		return;
@@ -945,8 +970,10 @@ void Simulation::updateCSStats(bool readback)
 
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
 
-	DispatchCSReduction(compute_program, testID, fixededgesID, partial_group_count, 2u, readback, readback);
-	if (!readback)
+	const bool profile_stats = readback || GenPDProfileGpuQueriesEnabled();
+
+	DispatchCSReduction(compute_program, testID, fixededgesID, partial_group_count, 2u, profile_stats, profile_stats);
+	if (!profile_stats)
 	{
 		return;
 	}
@@ -1517,14 +1544,17 @@ void Simulation::Update()
 		}
 		else
 		{
-			std::string filePath = "D:\\data.txt";
-			//std::string filePath_0 = "D:\\G.txt";
-			std::string filePath_1 = "D:\\K.txt";
-			std::string filePath_2 = "D:\\P.txt";
+			std::string filePath = GenPDResolveOutputPath("energy\\data.txt");
+			//std::string filePath_0 = GenPDResolveOutputPath("energy\\G.txt");
+			std::string filePath_1 = GenPDResolveOutputPath("energy\\K.txt");
+			std::string filePath_2 = GenPDResolveOutputPath("energy\\P.txt");
 
+			GenPDEnsureDirectoryForFile(filePath);
 			std::ofstream outFile(filePath, std::ios::out | std::ios::app);
 			//std::ofstream outFile_0(filePath_0, std::ios::out | std::ios::app);
+			GenPDEnsureDirectoryForFile(filePath_1);
 			std::ofstream outFile_1(filePath_1, std::ios::out | std::ios::app);
+			GenPDEnsureDirectoryForFile(filePath_2);
 			std::ofstream outFile_2(filePath_2, std::ios::out | std::ios::app);
 
 			// output total energy;
@@ -1582,18 +1612,9 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 	static std::ofstream profile_file;
 	if (!initialized)
 	{
-		const char* candidate_paths[] =
-		{
-			"./output/frame_profile.csv",
-			"output/frame_profile.csv",
-			"../output/frame_profile.csv",
-			"../../output/frame_profile.csv"
-		};
-
-		for (int i = 0; i < 4 && !profile_file.is_open(); ++i)
-		{
-			profile_file.open(candidate_paths[i], std::ios::out | std::ios::trunc);
-		}
+		const std::string profile_path = GenPDResolveOutputPath("frame_profile.csv");
+		GenPDEnsureDirectoryForFile(profile_path);
+		profile_file.open(profile_path.c_str(), std::ios::out | std::ios::trunc);
 
 		if (profile_file.is_open())
 		{
@@ -3190,7 +3211,8 @@ void Simulation::integrateImplicitMethod()
 		m_double1x1_time[0] = total_time;
 		m_double1x1_energy[0] = energy;
 
-		/*	std::ofstream outFile_e(filePath_e, std::ios::out | std::ios::app);
+		/*	GenPDEnsureDirectoryForFile(filePath_e);
+	std::ofstream outFile_e(filePath_e, std::ios::out | std::ios::app);
 
 			if (!outFile_e.is_open() ) {
 				std::cerr << "Failed to open file for writing." << std::endl;
@@ -3281,6 +3303,7 @@ void Simulation::integrateImplicitMethod()
 			updateCSStats(true);
 		}
 
+		ScopedCSDebugGroup debug_group_descent("GenPD descent update");
 		glUseProgram(descent_program);
 		static GLint beta_uniform = -1;
 		static GLint descent_mode_uniform = -1;
@@ -3670,6 +3693,7 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 
 	TimerWrapper t_descent;
 	t_descent.Tic();
+	ScopedCSDebugGroup debug_group_descent("GenPD descent update");
 	glUseProgram(descent_program);
 	static GLint beta_location = -1;
 	static GLint descent_mode_location = -1;
@@ -3754,7 +3778,8 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 //	/*GLint b = glGetUniformLocation(computeX_program, "beta_k");
 //	glUniform1f(b, beta);
 //
-//	glUseProgram(descent_program);
+//	ScopedCSDebugGroup debug_group_descent("GenPD descent update");
+	//	glUseProgram(descent_program);
 //	glDispatchCompute((descent_dir.size() + 255) / 256, 1, 1);
 //	glMemoryBarrier(GL_ALL_BARRIER_BITS);*/
 //
@@ -5018,7 +5043,8 @@ void Simulation::Evaluatespringlength(const VectorX& x)
 		}
 	}
 
-	std::string filePath_e = "D:\\stress.txt";
+	std::string filePath_e = GenPDResolveOutputPath("stress.txt");
+	GenPDEnsureDirectoryForFile(filePath_e);
 	std::ofstream outFile_e(filePath_e, std::ios::out | std::ios::app);
 
 	if (!outFile_e.is_open()) {
@@ -5320,6 +5346,7 @@ void Simulation::evaluateHessianCollision(const VectorX& x, SparseMatrix& hessia
 
 ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
 {
+	ScopedCSDebugGroup debug_group("GenPD line search");
 	(void)x;
 	(void)gradient_dir;
 	(void)descent_dir;
