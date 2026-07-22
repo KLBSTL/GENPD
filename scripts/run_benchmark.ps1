@@ -3,6 +3,8 @@ param(
     [string]$RunLabel = ('benchmark-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [int]$Frames = 300,
     [int]$Warmup = 30,
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
+    [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
@@ -84,6 +86,7 @@ $appArgs = @(
     '--project-root', $ProjectRoot,
     '--output-dir', $OutputDir,
     '--run-label', $RunLabel,
+    '--solver-variant', $SolverVariant,
     '--frames', $Frames,
     '--warmup', $Warmup
 )
@@ -110,4 +113,5 @@ if ($exitCode -ne 0) {
 }
 
 Write-Host "Profile CSV: $(Join-Path $OutputDir 'frame_profile.csv')"
+Write-Host "Experiment profile CSV: $(Join-Path $OutputDir 'frame_profile_experiment.csv')"
 Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"

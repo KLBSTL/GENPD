@@ -36,6 +36,7 @@
 
 //----------Headers--------------//
 #include "global_headers.h"
+#include <cstdlib>
 #include "math_headers.h"
 #include "openGL_headers.h"
 //----------Framework--------------//
@@ -44,6 +45,7 @@
 #include "stb_image_write.h"
 #include "glsl_wrapper.h"
 #include "runtime_paths.h"
+#include "experiment_variant.h"
 #include "AntTweakBar.h"
 #include "anttweakbar_wrapper.h"
 #include "camera.h"
@@ -118,6 +120,7 @@ int g_benchmark_warmup_frames = 30;
 std::string g_cli_project_root;
 std::string g_cli_output_dir;
 std::string g_cli_run_label;
+std::string g_cli_solver_variant;
 bool g_cli_profile_gpu_queries = false;
 bool g_cli_print_paths = false;
 
@@ -226,6 +229,21 @@ int main(int argc, char ** argv)
 
     // user init
     init();
+	if (!g_cli_solver_variant.empty())
+	{
+		GenPDExperimentVariant variant;
+		if (!GenPDParseExperimentVariant(g_cli_solver_variant, variant))
+		{
+			std::cerr << "Unknown --solver-variant: " << g_cli_solver_variant << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		GenPDSetExperimentVariant(variant);
+	}
+	if (_putenv_s("GENPD_SOLVER_VARIANT", GenPDExperimentVariantName()) != 0)
+	{
+		std::cerr << "Warning: cannot set solver-variant metadata environment." << std::endl;
+	}
+	std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
 	glutReshapeWindow(g_screen_width, g_screen_height);
 	GenPDWriteRunMetadata(
 		argc,
@@ -758,6 +776,10 @@ void parse_command_line(int argc, char** argv)
 		{
 			g_cli_run_label = argv[++i];
 		}
+		else if (arg == "--solver-variant" && i + 1 < argc)
+		{
+			g_cli_solver_variant = argv[++i];
+		}
 		else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
@@ -781,6 +803,9 @@ void parse_command_line(int argc, char** argv)
 				<< "  --output-dir PATH           Write benchmark/profile outputs to this directory.\n"
 				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
 				<< "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
+				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
+				<< "                              gpu-gather-fusion-batched-ls-persistent.\n"
 				<< "  --print-paths               Print resolved project/output/executable paths.\n"
 				<< "  --benchmark-swing-attachments\n"
 				<< "                              Move attachment constraints during benchmark.\n";

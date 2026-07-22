@@ -33,12 +33,13 @@ baseline tag：`baseline-20260722` -> `8433064`
 
 运行时变体清单：
 
-- [ ] `cpu-ncg`：CPU 约束遍历 NCG。
-- [ ] `gpu-edge-scatter`：GPU edge/constraint scatter + atomic NCG。
-- [ ] `gpu-gather-no-fusion`：GPU vertex gather，但 gradient、norm、gdotd 分 kernel。
-- [ ] `gpu-gather-fusion`：当前主方法，vertex gather + fused gradient/stat partials。
-- [ ] `gpu-gather-fusion-batched-ls`：融合版本加 batched line search。
-- [ ] `gpu-gather-fusion-batched-ls-persistent`：进一步保留 persistent buffers。
+- [x] `cpu-ncg`：CPU 约束遍历 NCG。
+- [x] `gpu-edge-scatter`：GPU edge/constraint scatter + atomic NCG。
+- [x] `gpu-gather-no-fusion`：GPU vertex gather，但 gradient、norm、gdotd 分 kernel。
+- [x] `gpu-gather-fusion`：当前主方法，vertex gather + fused gradient/stat partials。
+- [x] `gpu-gather-fusion-batched-ls`：融合版本加 batched line search。
+- [x] `gpu-gather-fusion-batched-ls-persistent`：进一步保留 persistent buffers。
+- [x] Runtime CLI: `--solver-variant`; each run writes `solver_variant` to `run_metadata.json` and emits `frame_profile_experiment.csv` without changing the legacy CSV schema.
 
 每个变体记录：
 

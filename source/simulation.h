@@ -430,11 +430,11 @@ protected:
 
 	// use compute shader
 	bool use_cs = true;
-	GLuint gradient_shader, energy_shader, descent_shader, iner_shader,
+	GLuint gradient_shader, gradient_scatter_shader, gradient_finalize_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
 		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader;
 
-	GLuint gradient_program, energy_program, computeX_program, descent_program, iner_program,
+	GLuint gradient_program, gradient_scatter_program, gradient_finalize_program, energy_program, computeX_program, descent_program, iner_program,
 		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
@@ -1099,6 +1099,8 @@ void main() {
 
 	std::vector<glm::vec3> fixed_points;
 	std::string m_gradient_shader_file;
+	std::string m_gradient_scatter_shader_file;
+	std::string m_gradient_finalize_shader_file;
 	std::string m_energy_shader_file;
 	std::string m_objective_shader_file;
 	std::string m_energy_for_linesearch_shader_file;
@@ -1218,6 +1220,7 @@ private:
 	// line search
 	ScalarType lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
+	ScalarType lineSearchCSSerial(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType linesearchWithPrefetchedEnergyAndGradientComputing(const VectorX& x, const ScalarType current_energy, const VectorX& gradient_dir, const VectorX& descent_dir, ScalarType& next_energy, VectorX& next_gradient_dir);
 	ScalarType lineSearch_ncg(const VectorX& x, const  VectorX& gradient_dir, VectorX& descent_dir, const SparseMatrix& Hessian);
 

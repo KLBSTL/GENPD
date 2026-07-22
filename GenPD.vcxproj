@@ -26,6 +26,7 @@
     <ClCompile Include="source\constraint_penalty.cpp" />
     <ClCompile Include="source\constraint_spring.cpp" />
     <ClCompile Include="source\constraint_tet.cpp" />
+    <ClCompile Include="source\experiment_variant.cpp" />
     <ClCompile Include="source\fps.cpp" />
     <ClCompile Include="source\glsl_wrapper.cpp" />
     <ClCompile Include="source\handle.cpp" />
@@ -51,6 +52,7 @@
     <ClInclude Include="source\camera.h" />
     <ClInclude Include="source\clock.h" />
     <ClInclude Include="source\constraint.h" />
+    <ClInclude Include="source\experiment_variant.h" />
     <ClInclude Include="source\fps.h" />
     <ClInclude Include="source\global_headers.h" />
     <ClInclude Include="source\glsl_wrapper.h" />

@@ -41,6 +41,7 @@
 #include "simulation.h"
 #include "timer_wrapper.h"
 #include "runtime_paths.h"
+#include "experiment_variant.h"
 
 #ifdef ENABLE_MATLAB_DEBUGGING
 #include "matlab_debugger.h"
@@ -91,6 +92,13 @@ namespace
 	unsigned int g_cs_profile_full_linesearch_calls = 0;
 	unsigned int g_cs_profile_skipped_linesearch_calls = 0;
 	unsigned int g_cs_profile_unit_step_accepts = 0;
+	unsigned int g_cs_profile_gradient_dispatches = 0;
+	unsigned int g_cs_profile_stats_dispatches = 0;
+	unsigned int g_cs_profile_reduction_dispatches = 0;
+	unsigned int g_cs_profile_xupdate_dispatches = 0;
+	unsigned int g_cs_profile_descent_dispatches = 0;
+	unsigned int g_cs_profile_host_readbacks = 0;
+	unsigned int g_cs_profile_solver_finish_calls = 0;
 	unsigned int g_cs_unit_step_shortcut_budget = 0;
 	bool g_cs_prefetched_energy_valid = false;
 	std::size_t g_cs_gradient_buffer_bytes = 0;
@@ -203,16 +211,54 @@ namespace
 		pending = true;
 	}
 
+	typedef void (GLAPIENTRY * CSDebugGroupPushProc)(GLenum source, GLuint id, GLsizei length, const GLchar* message);
+	typedef void (GLAPIENTRY * CSDebugGroupPopProc)(void);
+
+	bool IsInvalidOpenGLProcAddress(PROC proc)
+	{
+		return proc == NULL || proc == reinterpret_cast<PROC>(1) || proc == reinterpret_cast<PROC>(2)
+			|| proc == reinterpret_cast<PROC>(3) || proc == reinterpret_cast<PROC>(-1);
+	}
+
+	CSDebugGroupPushProc GetCSDebugGroupPushProc()
+	{
+		static CSDebugGroupPushProc proc = NULL;
+		static bool resolved = false;
+		if (!resolved)
+		{
+			const PROC raw_proc = wglGetProcAddress("glPushDebugGroup");
+			proc = IsInvalidOpenGLProcAddress(raw_proc) ? NULL : reinterpret_cast<CSDebugGroupPushProc>(raw_proc);
+			resolved = true;
+		}
+		return proc;
+	}
+
+	CSDebugGroupPopProc GetCSDebugGroupPopProc()
+	{
+		static CSDebugGroupPopProc proc = NULL;
+		static bool resolved = false;
+		if (!resolved)
+		{
+			const PROC raw_proc = wglGetProcAddress("glPopDebugGroup");
+			proc = IsInvalidOpenGLProcAddress(raw_proc) ? NULL : reinterpret_cast<CSDebugGroupPopProc>(raw_proc);
+			resolved = true;
+		}
+		return proc;
+	}
+
 	struct ScopedCSDebugGroup
 	{
+		CSDebugGroupPopProc pop_proc;
 		bool active;
 
 		ScopedCSDebugGroup(const char* label)
-			: active(false)
+			: pop_proc(NULL), active(false)
 		{
-			if (GenPDProfileGpuQueriesEnabled() && GLEW_KHR_debug)
+			const CSDebugGroupPushProc push_proc = GetCSDebugGroupPushProc();
+			pop_proc = GetCSDebugGroupPopProc();
+			if (GenPDProfileGpuQueriesEnabled() && push_proc != NULL && pop_proc != NULL)
 			{
-				glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0, -1, label);
+				push_proc(GL_DEBUG_SOURCE_APPLICATION, 0, -1, label);
 				active = true;
 			}
 		}
@@ -221,7 +267,7 @@ namespace
 		{
 			if (active)
 			{
-				glPopDebugGroup();
+				pop_proc();
 			}
 		}
 	};
@@ -257,6 +303,7 @@ namespace
 
 	void DispatchCSReduction(GLuint reduction_program, GLuint scratch_buffer, GLuint output_buffer, GLuint partial_count, GLuint output_count, bool profile_stats_reduction = false, bool require_cpu_visibility = true, GLuint output_offset = 0u)
 	{
+		++g_cs_profile_reduction_dispatches;
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kCSScratchBinding, scratch_buffer);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kCSReductionOutputBinding, output_buffer);
 
@@ -293,6 +340,7 @@ namespace
 
 	void DispatchCSReductionIndirect(GLuint reduction_program, GLuint scratch_buffer, GLuint output_buffer, GLuint partial_count, GLuint output_count, GLuint output_offset, GLuint indirect_buffer, GLintptr indirect_offset)
 	{
+		++g_cs_profile_reduction_dispatches;
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kCSScratchBinding, scratch_buffer);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, kCSReductionOutputBinding, output_buffer);
 
@@ -350,6 +398,13 @@ namespace
 		g_cs_profile_full_linesearch_calls = 0;
 		g_cs_profile_skipped_linesearch_calls = 0;
 		g_cs_profile_unit_step_accepts = 0;
+		g_cs_profile_gradient_dispatches = 0;
+		g_cs_profile_stats_dispatches = 0;
+		g_cs_profile_reduction_dispatches = 0;
+		g_cs_profile_xupdate_dispatches = 0;
+		g_cs_profile_descent_dispatches = 0;
+		g_cs_profile_host_readbacks = 0;
+		g_cs_profile_solver_finish_calls = 0;
 		g_cs_prefetched_energy_valid = false;
 	}
 
@@ -366,6 +421,14 @@ namespace
 		g_cs_render_normal_buffer_bytes = 0;
 		g_cs_state_position_buffer_bytes = 0;
 		g_cs_state_stats_buffer_bytes = 0;
+	}
+
+	std::size_t CurrentCSProfileBufferBytes(const std::vector<float>& scratch)
+	{
+		return g_cs_gradient_buffer_bytes + g_cs_descent_buffer_bytes + g_cs_x_buffer_bytes + g_cs_y_buffer_bytes
+			+ g_cs_energy_buffer_bytes + g_cs_inertia_buffer_bytes + g_cs_collision_velocity_buffer_bytes
+			+ g_cs_collision_primitive_buffer_bytes + g_cs_render_normal_buffer_bytes
+			+ g_cs_state_position_buffer_bytes + g_cs_state_stats_buffer_bytes + scratch.size() * sizeof(float);
 	}
 }
 
@@ -470,6 +533,8 @@ Simulation::Simulation()
 	m_cs_skip_cpu_damping_once = false;
 
 	m_gradient_shader_file = "./shaders/gradient.comp";
+	m_gradient_scatter_shader_file = "./shaders/gradient_scatter.comp";
+	m_gradient_finalize_shader_file = "./shaders/gradient_finalize.comp";
 	m_energy_shader_file = "./shaders/energy.comp";
 	m_objective_shader_file = "./shaders/objective.comp";
 	m_energy_for_linesearch_shader_file = "./shaders/energy_for_linesearch.comp";
@@ -579,6 +644,8 @@ void Simulation::set_shader()
 	};
 
 	compile_compute_program(gradient_shader, gradient_program, load_shader_source(m_gradient_shader_file, gradient_source), "gradient compute shader");
+	compile_compute_program(gradient_scatter_shader, gradient_scatter_program, load_shader_source(m_gradient_scatter_shader_file, ""), "gradient scatter compute shader");
+	compile_compute_program(gradient_finalize_shader, gradient_finalize_program, load_shader_source(m_gradient_finalize_shader_file, ""), "gradient finalize compute shader");
 	compile_compute_program(iner_shader, iner_program, load_shader_source(m_iner_shader_file, iner_source), "inertia compute shader");
 	compile_compute_program(descent_shader, descent_program, load_shader_source(m_descent_shader_file, descent_source), "descent compute shader");
 	compile_compute_program(energy_shader, energy_program, load_shader_source(m_energy_shader_file, energy_source), "energy compute shader");
@@ -898,7 +965,11 @@ void Simulation::uploadCSCollisionPrimitives()
 
 void Simulation::dispatchCSGradient(bool pure_constraint_only, bool profile_gradient_query)
 {
-	ScopedCSDebugGroup debug_group(pure_constraint_only ? "GenPD gradient constraint-only" : "GenPD gradient gather fusion");
+	const bool use_edge_scatter = GenPDExperimentUsesEdgeScatter();
+	const bool fuse_gradient_stats = !use_edge_scatter && GenPDExperimentUsesFusedGradientStats();
+	ScopedCSDebugGroup debug_group(
+		use_edge_scatter ? "GenPD gradient edge scatter" :
+		(fuse_gradient_stats ? "GenPD gradient gather fusion" : "GenPD gradient gather"));
 	if (!use_cs || !m_mesh)
 	{
 		return;
@@ -906,39 +977,82 @@ void Simulation::dispatchCSGradient(bool pure_constraint_only, bool profile_grad
 
 	uploadCSResourcesIfNeeded();
 
-	const GLuint partial_group_count = ComputeCSGradientGroupCount(static_cast<std::size_t>(m_mesh->m_vertices_number));
+	const GLuint vertex_group_count = ComputeCSGradientGroupCount(static_cast<std::size_t>(m_mesh->m_vertices_number));
 	if (!pure_constraint_only)
 	{
-		EnsureFloatScratchBuffer(testID, test_, static_cast<std::size_t>(2u) * partial_group_count);
+		EnsureFloatScratchBuffer(testID, test_, static_cast<std::size_t>(2u) * vertex_group_count);
 	}
 
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
-	glUseProgram(gradient_program);
-	static GLint pure_constraint_location = -1;
-	static GLint write_stats_location = -1;
-	if (pure_constraint_location < 0)
-	{
-		pure_constraint_location = glGetUniformLocation(gradient_program, "pure_constraint_only");
-		write_stats_location = glGetUniformLocation(gradient_program, "write_stats");
-	}
-	glUniform1i(pure_constraint_location, pure_constraint_only ? 1 : 0);
-	glUniform1i(write_stats_location, pure_constraint_only ? 0 : 1);
 	const bool profile_gradient = (profile_gradient_query || GenPDProfileGpuQueriesEnabled()) && !pure_constraint_only;
 	if (profile_gradient)
 	{
 		BeginCSGpuTimer(g_cs_profile_gradient_query);
 	}
-	glDispatchCompute(partial_group_count, 1, 1);
+
+	if (use_edge_scatter)
+	{
+		const float zero_gradient = 0.0f;
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+		glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero_gradient);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+		glUseProgram(gradient_scatter_program);
+		const GLuint constraint_group_count = ComputeCSPartialGroupCount(static_cast<std::size_t>(comp_params.edge_size));
+		++g_cs_profile_gradient_dispatches;
+		glDispatchCompute(constraint_group_count, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+		if (!pure_constraint_only)
+		{
+			ScopedCSDebugGroup finalize_group("GenPD gradient scatter finalize");
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+			glUseProgram(gradient_finalize_program);
+			++g_cs_profile_gradient_dispatches;
+			glDispatchCompute(vertex_group_count, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		}
+	}
+	else
+	{
+		glUseProgram(gradient_program);
+		static GLint pure_constraint_location = -1;
+		static GLint write_stats_location = -1;
+		if (pure_constraint_location < 0)
+		{
+			pure_constraint_location = glGetUniformLocation(gradient_program, "pure_constraint_only");
+			write_stats_location = glGetUniformLocation(gradient_program, "write_stats");
+		}
+		glUniform1i(pure_constraint_location, pure_constraint_only ? 1 : 0);
+		glUniform1i(write_stats_location, (!pure_constraint_only && fuse_gradient_stats) ? 1 : 0);
+		++g_cs_profile_gradient_dispatches;
+		glDispatchCompute(vertex_group_count, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	}
+
 	if (profile_gradient)
 	{
 		EndCSGpuTimer(g_cs_profile_gradient_query_pending);
 	}
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-}
 
+	if (!pure_constraint_only && !fuse_gradient_stats)
+	{
+		ScopedCSDebugGroup stats_group("GenPD gradient stats pass");
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, DescentID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, testID);
+		glUseProgram(colliEnergy_program);
+		++g_cs_profile_stats_dispatches;
+		glDispatchCompute(vertex_group_count, 1, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	}
+}
 ScalarType Simulation::readCSStatsFromGPU(bool profile_readback)
 {
 	ScalarType stats[2] = { 0, 0 };
+	++g_cs_profile_host_readbacks;
 	TimerWrapper t_stats_readback;
 	if (profile_readback)
 	{
@@ -1087,7 +1201,7 @@ bool Simulation::PrepareCS2RenderBuffers()
 }
 bool Simulation::shouldUseCS2GpuState()
 {
-	if (!use_cs || !m_mesh || cs2_state_program == 0)
+	if (!GenPDExperimentUsesPersistentBuffers() || !use_cs || !m_mesh || cs2_state_program == 0)
 	{
 		return false;
 	}
@@ -1287,6 +1401,12 @@ Simulation::~Simulation()
 
 	glDeleteShader(gradient_shader);
 	glDeleteProgram(gradient_program);
+
+	glDeleteShader(gradient_scatter_shader);
+	glDeleteProgram(gradient_scatter_program);
+
+	glDeleteShader(gradient_finalize_shader);
+	glDeleteProgram(gradient_finalize_program);
 
 	glDeleteShader(energy_shader);
 	glDeleteProgram(energy_program);
@@ -1610,6 +1730,7 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 
 	static bool initialized = false;
 	static std::ofstream profile_file;
+	static std::ofstream experiment_profile_file;
 	if (!initialized)
 	{
 		const std::string profile_path = GenPDResolveOutputPath("frame_profile.csv");
@@ -1620,6 +1741,14 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 		{
 			profile_file << "frame,fps_avg,fps_inst,use_cs_ncg,converged,exploded,iterations,total_ms,front_ms,transfer_ms,cs_y_upload_ms,cs_y_to_x_copy_ms,cs_x_readback_ms,cs_x_readback_wait_ms,cs_x_readback_copy_ms,iteration_ms,optimization_ms,back_ms,update_posvel_ms,position_stats_ms,collision_ms,step_size,objective_energy,gradient_norm,max_displacement,max_position,cs_linesearch_ms,cs_gradstats_ms,cs_gradient_gpu_ms,cs_reduction_gpu_ms,cs_stats_readback_ms,cs_xupdate_ms,cs_xupdate_gpu_ms,cs_descent_ms,cs_descent_gpu_ms,cs_full_ls,cs_skip_ls,cs_unit_accepts\n";
 			profile_file.flush();
+		}
+		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
+		GenPDEnsureDirectoryForFile(experiment_profile_path);
+		experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
+		if (experiment_profile_file.is_open())
+		{
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes\n";
+			experiment_profile_file.flush();
 		}
 		initialized = true;
 	}
@@ -1668,7 +1797,30 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 		<< g_cs_profile_skipped_linesearch_calls << ","
 		<< g_cs_profile_unit_step_accepts << "\n";
 	profile_file.flush();
-}
+
+	if (experiment_profile_file.is_open())
+	{
+		experiment_profile_file << frame << ","
+			<< GenPDExperimentVariantName() << ","
+			<< ((GenPDExperimentUsesPersistentBuffers() && m_cs_gpu_state_valid) ? 1 : 0) << ","
+			<< g_cs_profile_gradient_dispatches << ","
+			<< g_cs_profile_stats_dispatches << ","
+			<< g_cs_profile_reduction_dispatches << ","
+			<< g_cs_profile_xupdate_dispatches << ","
+			<< g_cs_profile_descent_dispatches << ","
+			<< g_cs_profile_full_linesearch_calls << ","
+			<< g_cs_profile_skipped_linesearch_calls << ","
+			<< g_cs_profile_host_readbacks << ","
+			<< g_cs_profile_solver_finish_calls << ","
+			<< CurrentCSProfileBufferBytes(test_) << ","
+			<< g_cs_gradient_buffer_bytes << ","
+			<< g_cs_descent_buffer_bytes << ","
+			<< g_cs_x_buffer_bytes << ","
+			<< g_cs_y_buffer_bytes << ","
+			<< test_.size() * sizeof(float) << ","
+			<< g_cs_state_position_buffer_bytes << "\n";
+		experiment_profile_file.flush();
+	}}
 
 void Simulation::GetOverlayChar(char* overlay, unsigned int size)
 {
@@ -3122,7 +3274,7 @@ void Simulation::integrateImplicitMethod()
 	TimerWrapper myti, inteti, backtime, transtime;
 	inteti.Tic();
 	myti.Tic();
-	const bool use_cs_ncg = use_cs && (m_optimization_method == OPTIMIZATION_METHOD_NCG);
+	const bool use_cs_ncg = use_cs && GenPDExperimentUsesCSNCG() && (m_optimization_method == OPTIMIZATION_METHOD_NCG);
 	bool use_cs_gpu_state = use_cs_ncg && shouldUseCS2GpuState();
 	if (m_cs_cpu_state_stale && !use_cs_gpu_state)
 	{
@@ -3228,10 +3380,7 @@ void Simulation::integrateImplicitMethod()
 
 
 	m_ls_is_first_iteration = true;
-	if (use_cs_ncg)
-	{
-		ResetCSNCGProfileMetrics();
-	}
+	ResetCSNCGProfileMetrics();
 
 	myti.Toc();
 
@@ -3315,6 +3464,7 @@ void Simulation::integrateImplicitMethod()
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
 		glUniform1f(beta_uniform, 0.0f);
 		glUniform1i(descent_mode_uniform, 0);
+		++g_cs_profile_descent_dispatches;
 		glDispatchCompute((gradient_dir.size() + 255) / 256, 1, 1);
 		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 
@@ -3407,6 +3557,7 @@ void Simulation::integrateImplicitMethod()
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 		TimerWrapper x_readback_wait_timer;
 		x_readback_wait_timer.Tic();
+		++g_cs_profile_solver_finish_calls;
 		glFinish();
 		x_readback_wait_timer.Toc();
 		cs_x_readback_wait_ms = x_readback_wait_timer.DurationInSeconds() * 1000.0;
@@ -3663,6 +3814,7 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 		size_location = glGetUniformLocation(computeX_program, "size");
 	}
 	glUniform1ui(size_location, static_cast<GLuint>(gradient_dir.size()));
+	++g_cs_profile_xupdate_dispatches;
 	const bool profile_xupdate_gpu = !g_cs_gpu_state_active_frame;
 	if (profile_xupdate_gpu)
 	{
@@ -3705,6 +3857,7 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
 	glUniform1f(beta_location, 0.0f);
 	glUniform1i(descent_mode_location, 1);
+	g_cs_profile_descent_dispatches += 2u;
 	const bool profile_descent_gpu = !g_cs_gpu_state_active_frame;
 	if (profile_descent_gpu)
 	{
@@ -5344,6 +5497,96 @@ void Simulation::evaluateHessianCollision(const VectorX& x, SparseMatrix& hessia
 	hessian_matrix.setFromTriplets(h_triplets.begin(), h_triplets.end());
 }
 
+ScalarType Simulation::lineSearchCSSerial(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
+{
+	(void)x;
+	(void)gradient_dir;
+	(void)descent_dir;
+
+	if (!GenPDExperimentUsesBatchedLineSearch())
+	{
+		return lineSearchCSSerial(x, gradient_dir, descent_dir);
+	}
+
+	if (!m_enable_line_search)
+	{
+		UploadCSLineSearchResult(ResultID, m_ls_step_size, 0, 1, m_ls_prefetched_energy);
+		return m_ls_step_size;
+	}
+
+	uploadCSResourcesIfNeeded();
+	const int base_K = comp_params.K;
+	const GLuint partial_group_count = std::max(
+		ComputeCSPartialGroupCount(static_cast<std::size_t>(comp_params.gradient_size)),
+		ComputeCSPartialGroupCount(static_cast<std::size_t>(comp_params.edge_size)));
+	EnsureFloatScratchBuffer(testID, test_, partial_group_count);
+	EnsureCSBufferStorage(energyID, sizeof(ScalarType), g_cs_energy_buffer_bytes);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, ResultID);
+
+	static GLint include_current_candidate_location = -1;
+	static GLint gpu_line_search_mode_location = -1;
+	if (include_current_candidate_location < 0)
+	{
+		include_current_candidate_location = glGetUniformLocation(energy_for_linesearch_program, "include_current_candidate");
+		gpu_line_search_mode_location = glGetUniformLocation(energy_for_linesearch_program, "gpu_line_search_mode");
+	}
+
+	auto evaluate_candidate_energy = [&](ScalarType step)
+	{
+		comp_params.t0 = static_cast<float>(step);
+		comp_params.K = 1;
+		glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+		glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+		glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+		glUseProgram(energy_for_linesearch_program);
+		glUniform1i(include_current_candidate_location, 0);
+		glUniform1i(gpu_line_search_mode_location, 0);
+		glDispatchCompute(1, partial_group_count, 1);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		DispatchCSReduction(compute_program, testID, energyID, partial_group_count, 1u);
+		ScalarType energy = 0.0;
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
+		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(energy), &energy);
+		return energy;
+	};
+
+	++g_cs_profile_full_linesearch_calls;
+	const ScalarType current_energy = g_cs_prefetched_energy_valid ? m_ls_prefetched_energy : evaluate_candidate_energy(0.0);
+	readCSStatsFromGPU(true);
+	ScalarType step = 1.0;
+	ScalarType accepted_energy = current_energy;
+	bool accepted = false;
+	while (step > 1e-5)
+	{
+		const ScalarType candidate_energy = evaluate_candidate_energy(step);
+		const ScalarType armijo_rhs = current_energy + m_ls_alpha * step * m_cs_gradient_dot_descent;
+		if (candidate_energy < armijo_rhs)
+		{
+			accepted = true;
+			accepted_energy = candidate_energy;
+			break;
+		}
+		step *= m_ls_beta;
+	}
+	if (!accepted)
+	{
+		step = 0.0;
+	}
+
+	m_ls_step_size = step;
+	m_ls_prefetched_energy = accepted_energy;
+	g_cs_prefetched_energy_valid = accepted;
+	g_cs_unit_step_shortcut_budget = 0;
+	UploadCSLineSearchResult(ResultID, step, 0, accepted ? 1 : 0, accepted_energy);
+
+	comp_params.t0 = 1.0f;
+	comp_params.K = base_K;
+	glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+	glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+	return step;
+}
 ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir)
 {
 	ScopedCSDebugGroup debug_group("GenPD line search");

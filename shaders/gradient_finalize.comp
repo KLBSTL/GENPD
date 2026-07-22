@@ -1,0 +1,47 @@
+#version 430
+
+layout(local_size_x = 256) in;
+
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
+};
+
+layout(std430, binding = 1) buffer GradientBuffer {
+    float gradient[];
+};
+
+layout(std430, binding = 2) readonly buffer XBuffer {
+    float x_pos[];
+};
+
+layout(std430, binding = 8) readonly buffer YBuffer {
+    float m_y[];
+};
+
+layout(std430, binding = 13) readonly buffer MassDiagBuffer {
+    float mass_diag[];
+};
+
+void main() {
+    uint vertex_index = gl_GlobalInvocationID.x;
+    if (vertex_index >= uint(vertex_size)) {
+        return;
+    }
+
+    uint base = vertex_index * 3u;
+    float h_sq = m_h * m_h;
+    gradient[base] = mass_diag[base] * (x_pos[base] - m_y[base]) + h_sq * gradient[base];
+    gradient[base + 1u] = mass_diag[base + 1u] * (x_pos[base + 1u] - m_y[base + 1u]) + h_sq * gradient[base + 1u];
+    gradient[base + 2u] = mass_diag[base + 2u] * (x_pos[base + 2u] - m_y[base + 2u]) + h_sq * gradient[base + 2u];
+}

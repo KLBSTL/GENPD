@@ -3,6 +3,8 @@ param(
     [string]$RunLabel = 'smoke-ncu',
     [int]$Frames = 60,
     [int]$Warmup = 10,
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
+    [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [string]$NcuPath = 'C:\Program Files\NVIDIA Corporation\Nsight Compute 2025.3.1\target\windows-desktop-win7-x64\ncu.exe',
@@ -58,6 +60,7 @@ $appArgs = @(
     '--project-root', $ProjectRoot,
     '--output-dir', $OutputDir,
     '--run-label', $RunLabel,
+    '--solver-variant', $SolverVariant,
     '--frames', $Frames,
     '--warmup', $Warmup,
     '--no-render',

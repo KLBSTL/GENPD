@@ -421,6 +421,7 @@ void GenPDWriteRunMetadata(
 	out << "  \"git_commit\": \"" << JsonEscape(EnvValue("GENPD_GIT_COMMIT")) << "\",\n";
 	out << "  \"gpu_name\": \"" << JsonEscape(EnvValue("GENPD_GPU_NAME")) << "\",\n";
 	out << "  \"nvidia_driver_version\": \"" << JsonEscape(EnvValue("GENPD_NVIDIA_DRIVER_VERSION")) << "\",\n";
+	out << "  \"solver_variant\": \"" << JsonEscape(EnvValue("GENPD_SOLVER_VARIANT")) << "\",\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";
 	out << "    \"enabled\": " << (benchmark_mode ? "true" : "false") << ",\n";

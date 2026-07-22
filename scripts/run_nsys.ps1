@@ -3,6 +3,8 @@ param(
     [string]$RunLabel = 'smoke-nsys',
     [int]$Frames = 300,
     [int]$Warmup = 30,
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
+    [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [string]$NsysPath = 'C:\Program Files\NVIDIA Corporation\Nsight Systems 2025.3.2\target-windows-x64\nsys.exe',
@@ -56,6 +58,7 @@ $appArgs = @(
     '--project-root', $ProjectRoot,
     '--output-dir', $OutputDir,
     '--run-label', $RunLabel,
+    '--solver-variant', $SolverVariant,
     '--frames', $Frames,
     '--warmup', $Warmup,
     '--no-render',
