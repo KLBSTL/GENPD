@@ -103,12 +103,15 @@ extern MatlabDebugger* g_debugger;
 
 AntTweakBarWrapper::AntTweakBarWrapper()
 {
-	
+	m_save_settings_on_destroy = true;
 }
 
 AntTweakBarWrapper::~AntTweakBarWrapper()
 {
-	SaveSettings(NULL);
+	if (m_save_settings_on_destroy)
+	{
+		SaveSettings(NULL);
+	}
 	Cleanup();
 }
 

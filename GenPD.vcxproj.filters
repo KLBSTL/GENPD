@@ -131,6 +131,9 @@
     <ClCompile Include="source\experiment_variant.cpp">
       <Filter>Source Files\core\simulation</Filter>
     </ClCompile>
+    <ClCompile Include="source\quality_metrics.cpp">
+      <Filter>Source Files\core\simulation</Filter>
+    </ClCompile>
     <ClCompile Include="source\math_headers.cpp">
       <Filter>Source Files\math</Filter>
     </ClCompile>
@@ -233,6 +236,9 @@
       <Filter>Source Files\core\simulation</Filter>
     </ClInclude>
     <ClInclude Include="source\experiment_variant.h">
+      <Filter>Source Files\core\simulation</Filter>
+    </ClInclude>
+    <ClInclude Include="source\quality_metrics.h">
       <Filter>Source Files\core\simulation</Filter>
     </ClInclude>
     <ClInclude Include="source\math_headers.h">

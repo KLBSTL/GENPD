@@ -27,7 +27,7 @@
 // Contact Tiantian Liu (ltt1598@gmail.com) if you have any questions.              //
 //----------------------------------------------------------------------------------//
 
-#pragma warning( disable : 4244 4267 4305 4996) 
+#pragma warning( disable : 4244 4267 4305 4996)
 
 #include <omp.h>
 #include <algorithm>
@@ -42,6 +42,7 @@
 #include "timer_wrapper.h"
 #include "runtime_paths.h"
 #include "experiment_variant.h"
+#include "quality_metrics.h"
 
 #ifdef ENABLE_MATLAB_DEBUGGING
 #include "matlab_debugger.h"
@@ -115,7 +116,14 @@ namespace
 	unsigned int g_cs_active_iteration_budget = 0;
 	bool g_cs_gpu_state_active_frame = false;
 
-	struct CSLineSearchResultGPU
+	struct ConstraintQualityMetrics
+{
+    ScalarType constraint_energy;
+    ScalarType mean_stretch_strain;
+    ScalarType max_stretch_strain;
+};
+
+struct CSLineSearchResultGPU
 	{
 		int chosen_i;
 		int accepted;
@@ -136,7 +144,69 @@ namespace
 		return true;
 	}
 
-	ScalarType VectorInfinityNorm(const VectorX& x)
+	ConstraintQualityMetrics ComputeConstraintQualityMetrics(const Mesh* mesh, const VectorX& positions)
+{
+    ConstraintQualityMetrics metrics = {};
+    if (!mesh || positions.size() != mesh->m_system_dimension)
+    {
+        return metrics;
+    }
+
+    unsigned int stretch_count = 0;
+    for (std::vector<Edge>::const_iterator edge_it = mesh->my_edge.begin(); edge_it != mesh->my_edge.end(); ++edge_it)
+    {
+        const Edge& edge = *edge_it;
+        if (edge.m_v1 >= mesh->m_vertices_number || edge.m_v2 >= mesh->m_vertices_number)
+        {
+            continue;
+        }
+
+        if (edge.fixed_point == 1)
+        {
+            const EigenVector3 fixed_point(edge.fixed_.x, edge.fixed_.y, edge.fixed_.z);
+            const EigenVector3 delta = positions.block_vector(edge.m_v1) - fixed_point;
+            metrics.constraint_energy += static_cast<ScalarType>(0.5f * edge.stiffness) * delta.squaredNorm();
+            continue;
+        }
+
+        const ScalarType rest_length = std::max(static_cast<ScalarType>(edge.rest_length), static_cast<ScalarType>(EPSILON));
+        const ScalarType current_length = (positions.block_vector(edge.m_v1) - positions.block_vector(edge.m_v2)).norm();
+        const ScalarType stretch = current_length - static_cast<ScalarType>(edge.rest_length);
+        const ScalarType strain = std::abs(stretch) / rest_length;
+        metrics.constraint_energy += static_cast<ScalarType>(0.5f * edge.stiffness) * stretch * stretch;
+        metrics.mean_stretch_strain += strain;
+        metrics.max_stretch_strain = std::max(metrics.max_stretch_strain, strain);
+        ++stretch_count;
+    }
+
+    if (stretch_count > 0)
+    {
+        metrics.mean_stretch_strain /= static_cast<ScalarType>(stretch_count);
+    }
+    return metrics;
+}
+
+ScalarType ComputeMaxPenetrationDepth(Scene* scene, bool processing_collision, const VectorX& positions, unsigned int vertex_count)
+{
+    if (!processing_collision || !scene || scene->IsEmpty())
+    {
+        return 0.0;
+    }
+
+    ScalarType max_penetration = 0.0;
+    EigenVector3 normal;
+    ScalarType distance = 0.0;
+    for (unsigned int vertex = 0; vertex < vertex_count; ++vertex)
+    {
+        if (scene->StaticIntersectionTest(positions.block_vector(vertex), normal, distance) && distance < 0.0)
+        {
+            max_penetration = std::max(max_penetration, -distance);
+        }
+    }
+    return max_penetration;
+}
+
+ScalarType VectorInfinityNorm(const VectorX& x)
 	{
 		ScalarType max_abs_value = 0.0;
 		for (int i = 0; i < x.size(); ++i)
@@ -500,6 +570,8 @@ Simulation::Simulation()
 	m_verbose_show_energy = false;
 	m_verbose_show_factorization_warning = true;
 	m_profile_logging_enabled = true;
+m_quality_metrics_enabled = false;
+m_quality_checkpoint_stride = 1;
 	m_last_profile_used_cs_ncg = false;
 	m_last_profile_converged = false;
 	m_last_profile_exploded = false;
@@ -1512,7 +1584,7 @@ void Simulation::Reset()
 
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, inerID);
 		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zero_values), zero_values, GL_DYNAMIC_DRAW);
-	
+
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, FlagID);
 		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zero_flags), zero_flags, GL_DYNAMIC_DRAW);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, FlagID);
@@ -1721,6 +1793,20 @@ void Simulation::Draw(const VBO& vbos)
 	}
 }
 
+void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride)
+{
+    m_reference_export_dir = reference_export_dir;
+    m_quality_reference_dir = quality_reference_dir;
+    m_quality_checkpoint_stride = std::max(1u, checkpoint_stride);
+    m_quality_metrics_enabled = !m_reference_export_dir.empty() || !m_quality_reference_dir.empty();
+    if (!m_reference_export_dir.empty() && !GenPDEnsureDirectory(m_reference_export_dir))
+    {
+        std::cerr << "Warning: cannot create reference checkpoint directory: " << m_reference_export_dir << std::endl;
+        m_reference_export_dir.clear();
+        m_quality_metrics_enabled = !m_quality_reference_dir.empty();
+    }
+}
+
 void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant)
 {
 	if (!m_profile_logging_enabled)
@@ -1731,6 +1817,7 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 	static bool initialized = false;
 	static std::ofstream profile_file;
 	static std::ofstream experiment_profile_file;
+static std::ofstream quality_profile_file;
 	if (!initialized)
 	{
 		const std::string profile_path = GenPDResolveOutputPath("frame_profile.csv");
@@ -1750,7 +1837,18 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes\n";
 			experiment_profile_file.flush();
 		}
-		initialized = true;
+		if (m_quality_metrics_enabled)
+{
+    const std::string quality_profile_path = GenPDResolveOutputPath("quality_metrics.csv");
+    GenPDEnsureDirectoryForFile(quality_profile_path);
+    quality_profile_file.open(quality_profile_path.c_str(), std::ios::out | std::ios::trunc);
+    if (quality_profile_file.is_open())
+    {
+        quality_profile_file << "frame,has_reference,finite,exploded,position_rel_l2,velocity_rel_l2,constraint_energy,reference_constraint_energy,constraint_energy_rel_error,mean_stretch_strain,reference_mean_stretch_strain,max_stretch_strain,reference_max_stretch_strain,max_penetration_depth,reference_max_penetration_depth\n";
+        quality_profile_file.flush();
+    }
+}
+initialized = true;
 	}
 
 	if (!profile_file.is_open())
@@ -1820,7 +1918,66 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 			<< test_.size() * sizeof(float) << ","
 			<< g_cs_state_position_buffer_bytes << "\n";
 		experiment_profile_file.flush();
-	}}
+
+}
+
+if (m_quality_metrics_enabled && quality_profile_file.is_open() && m_mesh)
+{
+    if (m_cs_cpu_state_stale)
+    {
+        syncCS2GpuStateToCPU();
+    }
+    const bool checkpoint_frame = (frame % m_quality_checkpoint_stride) == 0u;
+    if (checkpoint_frame && !m_reference_export_dir.empty()
+        && !GenPDWriteReferenceCheckpoint(m_reference_export_dir, frame, m_mesh->m_current_positions, m_mesh->m_current_velocities))
+    {
+        std::cerr << "Warning: cannot write reference checkpoint for frame " << frame << std::endl;
+    }
+
+    VectorX reference_positions;
+    VectorX reference_velocities;
+    bool has_reference = checkpoint_frame && !m_quality_reference_dir.empty()
+        && GenPDReadReferenceCheckpoint(m_quality_reference_dir, frame, reference_positions, reference_velocities)
+        && reference_positions.size() == m_mesh->m_system_dimension
+        && reference_velocities.size() == m_mesh->m_system_dimension
+        && GenPDVectorIsFinite(reference_positions) && GenPDVectorIsFinite(reference_velocities);
+
+    const bool finite = GenPDVectorIsFinite(m_mesh->m_current_positions) && GenPDVectorIsFinite(m_mesh->m_current_velocities);
+    const ConstraintQualityMetrics current_metrics = ComputeConstraintQualityMetrics(m_mesh, m_mesh->m_current_positions);
+    ConstraintQualityMetrics reference_metrics = {};
+    ScalarType position_relative_l2 = 0.0;
+    ScalarType velocity_relative_l2 = 0.0;
+    ScalarType constraint_energy_relative_error = 0.0;
+    ScalarType reference_penetration = 0.0;
+    if (has_reference)
+    {
+        position_relative_l2 = GenPDRelativeL2(m_mesh->m_current_positions, reference_positions);
+        velocity_relative_l2 = GenPDRelativeL2(m_mesh->m_current_velocities, reference_velocities);
+        reference_metrics = ComputeConstraintQualityMetrics(m_mesh, reference_positions);
+        constraint_energy_relative_error = std::abs(current_metrics.constraint_energy - reference_metrics.constraint_energy)
+            / std::max(std::abs(reference_metrics.constraint_energy), static_cast<ScalarType>(EPSILON));
+        reference_penetration = ComputeMaxPenetrationDepth(m_scene, m_processing_collision, reference_positions, m_mesh->m_vertices_number);
+    }
+
+    const ScalarType current_penetration = ComputeMaxPenetrationDepth(m_scene, m_processing_collision, m_mesh->m_current_positions, m_mesh->m_vertices_number);
+    quality_profile_file << frame << ","
+        << (has_reference ? 1 : 0) << ","
+        << (finite ? 1 : 0) << ","
+        << (m_last_profile_exploded ? 1 : 0) << ","
+        << position_relative_l2 << ","
+        << velocity_relative_l2 << ","
+        << current_metrics.constraint_energy << ","
+        << reference_metrics.constraint_energy << ","
+        << constraint_energy_relative_error << ","
+        << current_metrics.mean_stretch_strain << ","
+        << reference_metrics.mean_stretch_strain << ","
+        << current_metrics.max_stretch_strain << ","
+        << reference_metrics.max_stretch_strain << ","
+        << current_penetration << ","
+        << reference_penetration << "\n";
+    quality_profile_file.flush();
+}
+}
 
 void Simulation::GetOverlayChar(char* overlay, unsigned int size)
 {
@@ -2392,7 +2549,7 @@ void Simulation::AnimateHandle(const int current_frame)
 	}
 	if (segment == m_keyframe_handle_unit_translation_total_segments)
 	{
-		// do nothing 
+		// do nothing
 	}
 	else
 	{
@@ -2414,7 +2571,7 @@ void Simulation::AnimateHandle(const int current_frame)
 	}
 	if (segment == m_keyframe_handle_unit_rotation_total_segments)
 	{
-		// do nothing 
+		// do nothing
 	}
 	else
 	{
@@ -3169,7 +3326,7 @@ void Simulation::dampVelocity()//???????????§Ö????????????§¹??
 	//for(i = 0; i < size; ++i)
 	//{
 	//	r = m_mesh->m_current_positions.block_vector(i) - pos_mc;
-	//	delta_v = vel_mc + angular_vel.cross(r) - m_mesh->m_current_velocities.block_vector(i);     
+	//	delta_v = vel_mc + angular_vel.cross(r) - m_mesh->m_current_velocities.block_vector(i);
 	//	m_mesh->m_current_velocities.block_vector(i) += m_damping_coefficient * delta_v;
 	//}
 }
@@ -3337,10 +3494,10 @@ void Simulation::integrateImplicitMethod()
 	//		collisionDetection(x_n);
 	//	}
 	//	g_integration_timer.Tic();
-	//	
+	//
 	//	m_solver_type = SOLVER_TYPE_DIRECT_LLT;
 	//	converge = performNewtonsMethodOneIteration(x_n);
-	//	
+	//
 	//	m_ls_is_first_iteration = false;
 	//	g_integration_timer.Toc();
 	//}
@@ -3939,9 +4096,9 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 //	//// descent_dir = -gradient_dir + beta * descent_dir;
 //
 //	//std::cout << x[10];
-//	
 //
-//	////x = x + descent_dir * alpha_k; 
+//
+//	////x = x + descent_dir * alpha_k;
 //	glUseProgram(computeX_program);
 //	GLint ce = glGetUniformLocation(computeX_program, "alpha_k");
 //	glUniform1f(ce, alpha_k);
@@ -3974,9 +4131,9 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 //	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
 //		descent_dir.size() * sizeof(float),
 //		descent_dir.data());
-//	
 //
-//	
+//
+//
 //
 //	return true;
 //
@@ -4016,11 +4173,11 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 //	// ??edge_list????SSBO
 //	glBindBuffer(GL_SHADER_STORAGE_BUFFER, edgeID);
 //	glBufferData(GL_SHADER_STORAGE_BUFFER, m_mesh->m_edge_list.size() * sizeof(Edge),
-//		m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW); 
+//		m_mesh->m_edge_list.data(), GL_DYNAMIC_DRAW);
 //	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 //
 //	// ??gradient_dir????SSBO
-//	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID); 
+//	glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
 //	glBufferData(GL_SHADER_STORAGE_BUFFER,
 //		m_mesh->m_vertices_number*3 * sizeof(ScalarType), gradient_dir.data(), GL_DYNAMIC_DRAW);
 //	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, gradientID);
@@ -4664,7 +4821,7 @@ void Simulation::computeConstantVectorsYandZ()
 
 	//Eigen::VectorXd increment(3);
 	//increment << 1.0, 0.0, 0.0;
-	//VectorX 
+	//VectorX
 	//m_mesh->m_current_velocities += increment;
 
 	switch (m_integration_method)

@@ -147,6 +147,7 @@ public:
 	void Update();
 	void Draw(const VBO& vbos);
 	void LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant);
+void ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride);
 	bool PrepareCS2RenderBuffers();
 	GLuint CS2RenderPositionBuffer() const;
 	GLuint CS2RenderNormalBuffer() const;
@@ -234,6 +235,8 @@ public:
 	inline void SetScene(Scene* scene) { m_scene = scene; }
 	inline void SetStepMode(bool step_mode) { m_step_mode = step_mode; }
 	inline ScalarType Timestep() { return m_h; }
+inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
+inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
 
 protected:
 
@@ -394,6 +397,10 @@ protected:
 	bool m_verbose_show_energy;
 	bool m_verbose_show_factorization_warning;
 	bool m_profile_logging_enabled;
+bool m_quality_metrics_enabled;
+std::string m_reference_export_dir;
+std::string m_quality_reference_dir;
+unsigned int m_quality_checkpoint_stride;
 	bool m_last_profile_used_cs_ncg;
 	bool m_last_profile_converged;
 	bool m_last_profile_exploded;

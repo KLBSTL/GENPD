@@ -121,6 +121,12 @@ std::string g_cli_project_root;
 std::string g_cli_output_dir;
 std::string g_cli_run_label;
 std::string g_cli_solver_variant;
+int g_cli_iterations_per_frame = 0;
+std::string g_cli_reference_export_dir;
+std::string g_cli_quality_reference_dir;
+int g_cli_quality_checkpoint_stride = 1;
+bool g_cli_restore_iterations_per_frame = false;
+unsigned int g_cli_original_iterations_per_frame = 0;
 bool g_cli_profile_gpu_queries = false;
 bool g_cli_print_paths = false;
 
@@ -243,8 +249,23 @@ int main(int argc, char ** argv)
 	{
 		std::cerr << "Warning: cannot set solver-variant metadata environment." << std::endl;
 	}
-	std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
-	glutReshapeWindow(g_screen_width, g_screen_height);
+std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
+if (g_cli_iterations_per_frame > 0)
+{
+    g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
+g_cli_restore_iterations_per_frame = true;
+g_simulation->SetIterationsPerFrame(static_cast<unsigned int>(g_cli_iterations_per_frame));
+    std::cout << "GenPD iterations per frame: " << g_simulation->IterationsPerFrame() << std::endl;
+}
+const std::string reference_export_dir = g_cli_reference_export_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_reference_export_dir);
+const std::string quality_reference_dir = g_cli_quality_reference_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_quality_reference_dir);
+g_simulation->ConfigureQualityMetrics(reference_export_dir, quality_reference_dir, static_cast<unsigned int>(g_cli_quality_checkpoint_stride));
+const std::string iterations_per_frame_metadata = std::to_string(g_simulation->IterationsPerFrame());
+_putenv_s("GENPD_ITERATIONS_PER_FRAME", iterations_per_frame_metadata.c_str());
+_putenv_s("GENPD_REFERENCE_EXPORT_DIR", reference_export_dir.c_str());
+_putenv_s("GENPD_QUALITY_REFERENCE_DIR", quality_reference_dir.c_str());
+_putenv_s("GENPD_QUALITY_CHECKPOINT_STRIDE", std::to_string(g_cli_quality_checkpoint_stride).c_str());
+glutReshapeWindow(g_screen_width, g_screen_height);
 	GenPDWriteRunMetadata(
 		argc,
 		argv,
@@ -780,7 +801,23 @@ void parse_command_line(int argc, char** argv)
 		{
 			g_cli_solver_variant = argv[++i];
 		}
-		else if (arg == "--profile-gpu-queries")
+        else if (arg == "--iterations-per-frame" && i + 1 < argc)
+        {
+            g_cli_iterations_per_frame = parse_positive_int(argv[++i], g_cli_iterations_per_frame);
+        }
+        else if (arg == "--reference-export-dir" && i + 1 < argc)
+        {
+            g_cli_reference_export_dir = argv[++i];
+        }
+        else if (arg == "--quality-reference-dir" && i + 1 < argc)
+        {
+            g_cli_quality_reference_dir = argv[++i];
+        }
+        else if (arg == "--quality-checkpoint-stride" && i + 1 < argc)
+        {
+            g_cli_quality_checkpoint_stride = parse_positive_int(argv[++i], g_cli_quality_checkpoint_stride);
+        }
+        else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
 		}
@@ -802,7 +839,11 @@ void parse_command_line(int argc, char** argv)
 				<< "  --project-root PATH         Resolve config/shaders/textures from this GenPD root.\n"
 				<< "  --output-dir PATH           Write benchmark/profile outputs to this directory.\n"
 				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
-				<< "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+                << "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+                << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
+                << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
+                << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"
+                << "  --quality-checkpoint-stride N  Export/check checkpoints every N frames.\n"
 				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent.\n"
@@ -1074,6 +1115,10 @@ void init()
     // config init
     fprintf(stdout, "Initializing AntTweakBar...\n");
     g_config_bar = new AntTweakBarWrapper();
+if (g_benchmark_mode)
+{
+    g_config_bar->SetSaveSettingsOnDestroy(false);
+}
     g_config_bar->ChangeTwBarWindowSize(g_screen_width, g_screen_height);
 
 #ifdef ENABLE_MATLAB_DEBUGGING
@@ -1138,7 +1183,11 @@ void cleanup() // clean up in a reverse order
 		delete g_debugger;
 	}
 #endif // ENABLE_MATLAB_DEBUGGING
-    if (g_config_bar)
+    if (g_cli_restore_iterations_per_frame && g_simulation)
+{
+    g_simulation->SetIterationsPerFrame(g_cli_original_iterations_per_frame);
+}
+if (g_config_bar)
     {
         delete g_config_bar;
     }
@@ -1179,7 +1228,10 @@ void TW_CALL reset_handle(void*)
 void TW_CALL reset_simulation(void*)
 {
 	// save current setting before reset
-	AntTweakBarWrapper::SaveSettings(g_config_bar);
+	if (!g_benchmark_mode)
+{
+    AntTweakBarWrapper::SaveSettings(g_config_bar);
+}
 
 	// reset frame#
 	g_current_frame = 0;

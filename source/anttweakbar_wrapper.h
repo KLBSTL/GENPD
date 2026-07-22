@@ -63,6 +63,7 @@ public:
 	int Update();
 	inline void Draw() {TwDraw();}
 	inline void ChangeTwBarWindowSize(int width, int height) {TwWindowSize(width, height);}
+	inline void SetSaveSettingsOnDestroy(bool enabled) { m_save_settings_on_destroy = enabled; }
 
 	static void TW_CALL SetDefaultSettings(void*);
 	static void TW_CALL SaveSettings(void*);
@@ -74,6 +75,7 @@ protected:
 	TwBar *m_control_panel_bar; // Control Panel
 	TwBar *m_mesh_bar;   // Mesh Settings
 	TwBar *m_sim_bar;    // Simulation Settings
+	bool m_save_settings_on_destroy;
 };
 
 #endif

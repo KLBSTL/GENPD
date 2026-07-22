@@ -5,6 +5,10 @@ param(
     [int]$Warmup = 30,
     [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
+    [int]$IterationsPerFrame = 0,
+    [string]$ReferenceExportDir = '',
+    [string]$QualityReferenceDir = '',
+    [int]$QualityCheckpointStride = 1,
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
@@ -95,6 +99,12 @@ if ($NoRender) { $appArgs += '--no-render' }
 if ($Uncapped) { $appArgs += '--uncapped' }
 if ($SyncGpu) { $appArgs += '--sync-gpu' }
 if ($ProfileGpuQueries) { $appArgs += '--profile-gpu-queries' }
+if ($IterationsPerFrame -gt 0) { $appArgs += @('--iterations-per-frame', $IterationsPerFrame) }
+if ($ReferenceExportDir -ne '') { $appArgs += @('--reference-export-dir', [System.IO.Path]::GetFullPath($ReferenceExportDir)) }
+if ($QualityReferenceDir -ne '') { $appArgs += @('--quality-reference-dir', [System.IO.Path]::GetFullPath($QualityReferenceDir)) }
+if ($QualityCheckpointStride -gt 0 -and ($ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '')) {
+    $appArgs += @('--quality-checkpoint-stride', $QualityCheckpointStride)
+}
 if ($ExtraArgs) { $appArgs += $ExtraArgs }
 
 $logPath = Join-Path $OutputDir 'benchmark_stdout.log'
@@ -115,3 +125,6 @@ if ($exitCode -ne 0) {
 Write-Host "Profile CSV: $(Join-Path $OutputDir 'frame_profile.csv')"
 Write-Host "Experiment profile CSV: $(Join-Path $OutputDir 'frame_profile_experiment.csv')"
 Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"
+if ($ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
+    Write-Host "Quality metrics: $(Join-Path $OutputDir 'quality_metrics.csv')"
+}

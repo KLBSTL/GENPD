@@ -62,13 +62,23 @@ baseline tag：`baseline-20260722` -> `8433064`
 
 ## Phase 3：物理质量与参考解
 
-- [ ] 增加高精度参考解导出。
-- [ ] 计算位置相对误差。
-- [ ] 计算速度相对误差。
-- [ ] 计算能量或应变误差。
-- [ ] 记录最大穿透深度。
-- [ ] 统计失败率、NaN/Inf、exploded frame。
-- [ ] 输出 `frame_profile_extended.csv` 或独立质量指标 CSV。
+- [x] 增加可配置高迭代 CPU NCG 参考解导出。
+- [x] 计算位置相对误差。
+- [x] 计算速度相对误差。
+- [x] 计算约束能量相对误差与平均/最大拉伸应变。
+- [x] 记录最大外部碰撞穿透深度。
+- [x] 统计失败率、NaN/Inf、exploded frame。
+- [x] 输出独立 `quality_metrics.csv` 和汇总 CSV。
+
+实现入口：
+
+- `--iterations-per-frame N`、`--reference-export-dir PATH`、`--quality-reference-dir PATH`、`--quality-checkpoint-stride N`。
+- `scripts/run_reference.ps1` 固定使用 `cpu-ncg`，默认 100 次迭代/帧，并按检查点步长写入 `reference_state_<frame>.bin`；二进制头包含 magic、版本、帧号、标量字节数和向量维度。
+- 对比运行在同帧检查点存在时计算位置/速度相对 L2、约束能量相对误差、平均/最大弹簧应变和当前/参考最大外部穿透深度。`finite` 与 `exploded` 字段用于失败率。
+- `scripts/summarize_quality_metrics.ps1` 输出误差、能量/应变、穿透和失败率的 count、mean、stddev、P50、P95、minimum、maximum。误差项只汇总 `has_reference=1` 的帧。
+- 对 persistent GPU state，质量记录前会显式回读当前位置和速度，保证 CSV 不读取陈旧 CPU 镜像；该回读是质量测量开销，不应混入关闭质量记录的性能 profile。
+
+当前限定：约束能量和应变由当前 `Mesh::my_edge` 的 spring/attachment 表示计算，适合当前 cloth GPU 路径；tet 材料能量和参考迭代数的收敛标定仍需在正式实验前单独验证。CPU 仍负责每帧迭代、line-search 和 dispatch 的控制流。
 
 ## Phase 4：稳定性与场景矩阵
 

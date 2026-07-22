@@ -422,6 +422,12 @@ void GenPDWriteRunMetadata(
 	out << "  \"gpu_name\": \"" << JsonEscape(EnvValue("GENPD_GPU_NAME")) << "\",\n";
 	out << "  \"nvidia_driver_version\": \"" << JsonEscape(EnvValue("GENPD_NVIDIA_DRIVER_VERSION")) << "\",\n";
 	out << "  \"solver_variant\": \"" << JsonEscape(EnvValue("GENPD_SOLVER_VARIANT")) << "\",\n";
+	out << "  \"quality\": {\n";
+	out << "    \"iterations_per_frame\": \"" << JsonEscape(EnvValue("GENPD_ITERATIONS_PER_FRAME")) << "\",\n";
+	out << "    \"reference_export_dir\": \"" << JsonEscape(EnvValue("GENPD_REFERENCE_EXPORT_DIR")) << "\",\n";
+	out << "    \"reference_dir\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_REFERENCE_DIR")) << "\",\n";
+	out << "    \"checkpoint_stride\": \"" << JsonEscape(EnvValue("GENPD_QUALITY_CHECKPOINT_STRIDE")) << "\"\n";
+	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";
 	out << "    \"enabled\": " << (benchmark_mode ? "true" : "false") << ",\n";
