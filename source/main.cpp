@@ -131,6 +131,11 @@ ScalarType g_cli_stretch_stiffness = static_cast<ScalarType>(-1);
 ScalarType g_cli_bending_stiffness = static_cast<ScalarType>(-1);
 int g_cli_cloth_dimension = 0;
 std::string g_cli_scene;
+int g_cli_capture_frame = -1;
+std::string g_cli_capture_output;
+int g_cli_capture_width = 0;
+int g_cli_capture_height = 0;
+bool g_cli_capture_pending = false;
 bool g_cli_restore_iterations_per_frame = false;
 unsigned int g_cli_original_iterations_per_frame = 0;
 bool g_cli_profile_gpu_queries = false;
@@ -153,6 +158,7 @@ void schedule_next_timeout(void);
 void finish_display_frame(void);
 void apply_benchmark_swap_interval(void);
 void maybe_finish_benchmark(void);
+void maybe_capture_benchmark_frame(void);
 
 //----------anttweakbar handlers----------//
 void TW_CALL set_handle(void*);
@@ -217,6 +223,11 @@ int main(int argc, char ** argv)
 {
 	//test();
 	parse_command_line(argc, argv);
+	if (g_cli_capture_width > 0 && g_cli_capture_height > 0)
+	{
+		g_screen_width = g_cli_capture_width;
+		g_screen_height = g_cli_capture_height;
+	}
 	GenPDInitializeRuntimePaths(
 		argc > 0 ? argv[0] : NULL,
 		g_cli_project_root,
@@ -584,6 +595,7 @@ void display() {
     // Draw tweak bar
     g_config_bar->Draw();
 
+    maybe_capture_benchmark_frame();
     glutSwapBuffers();
 	finish_display_frame();
 }
@@ -877,6 +889,25 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_scene = argv[++i];
         }
+        else if (arg == "--capture-frame" && i + 1 < argc)
+        {
+            g_cli_capture_frame = parse_nonnegative_int(argv[++i], g_cli_capture_frame);
+            g_cli_capture_pending = g_cli_capture_frame >= 0;
+        }
+        else if (arg == "--capture-output" && i + 1 < argc)
+        {
+            g_cli_capture_output = argv[++i];
+        }
+        else if (arg == "--capture-resolution" && i + 2 < argc)
+        {
+            const int width = parse_positive_int(argv[++i], 0);
+            const int height = parse_positive_int(argv[++i], 0);
+            if (width > 0 && height > 0)
+            {
+                g_cli_capture_width = width;
+                g_cli_capture_height = height;
+            }
+        }
         else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
@@ -910,6 +941,9 @@ void parse_command_line(int argc, char** argv)
                 << "  --bending-stiffness FLOAT   Override cloth bending stiffness for this run.\n"
                 << "  --cloth-dimension N         Override square cloth resolution for this run.\n"
                 << "  --scene PATH                Load a scene XML file relative to project root.\n"
+                << "  --capture-frame N           Capture rendered benchmark frame N.\n"
+                << "  --capture-output PATH       PNG output path for --capture-frame.\n"
+                << "  --capture-resolution W H    Render capture at a fixed size.\n"
 				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent.\n"
@@ -919,6 +953,36 @@ void parse_command_line(int argc, char** argv)
 			exit(EXIT_SUCCESS);
 		}
 	}
+
+    if (g_cli_capture_pending)
+    {
+        g_benchmark_mode = true;
+        g_benchmark_no_render = false;
+        g_benchmark_hide_window = false;
+    }
+}
+
+void maybe_capture_benchmark_frame(void)
+{
+    if (!g_cli_capture_pending || g_current_frame != g_cli_capture_frame + 1)
+    {
+        return;
+    }
+
+    std::string capture_path = g_cli_capture_output;
+    if (capture_path.empty())
+    {
+        char capture_name[64];
+        sprintf_s(capture_name, 64, "screenshots\\capture_frame_%06d.png", g_cli_capture_frame);
+        capture_path = capture_name;
+    }
+
+    capture_path = GenPDResolveOutputPath(capture_path);
+    GenPDEnsureDirectoryForFile(capture_path);
+    grab_screen(capture_path.c_str());
+    g_cli_capture_pending = false;
+    std::cout << "Captured benchmark frame " << g_cli_capture_frame
+        << ": " << capture_path << std::endl;
 }
 
 void maybe_finish_benchmark(void)

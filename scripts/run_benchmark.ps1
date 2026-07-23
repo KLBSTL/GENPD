@@ -14,6 +14,11 @@ param(
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
     [switch]$SyncGpu,
+    [int]$CaptureFrame = -1,
+    [string]$CaptureOutput = '',
+    [int]$CaptureWidth = 0,
+    [int]$CaptureHeight = 0,
+    [switch]$Headless,
     [bool]$NoRender = $true,
     [bool]$Uncapped = $true,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -56,8 +61,8 @@ function Set-RunMetadataEnv {
 
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($git) {
-        $commit = & git -C $ProjectRoot rev-parse --short HEAD 2>$null
-        if ($LASTEXITCODE -eq 0 -and $commit) {
+        $commit = & git -c "safe.directory=$ProjectRoot" -C $ProjectRoot rev-parse --short HEAD 2>$null
+        if ($commit) {
             $env:GENPD_GIT_COMMIT = ($commit | Select-Object -First 1).Trim()
         }
     }
@@ -65,12 +70,12 @@ function Set-RunMetadataEnv {
     $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
     if ($nvidiaSmi) {
         $driver = & nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1
-        if ($LASTEXITCODE -eq 0 -and $driver) {
+        if ($driver) {
             $env:GENPD_NVIDIA_DRIVER_VERSION = $driver.Trim()
         }
 
         $gpu = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1
-        if ($LASTEXITCODE -eq 0 -and $gpu) {
+        if ($gpu) {
             $env:GENPD_GPU_NAME = $gpu.Trim()
         }
     }
@@ -82,6 +87,18 @@ if ($OutputDir -eq '') {
 }
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $ExePath = Resolve-GenPDExe -ProjectRoot $ProjectRoot -RequestedExePath $ExePath
+
+if ($CaptureFrame -lt -1) { throw 'CaptureFrame must be nonnegative or -1.' }
+if (($CaptureWidth -lt 0) -or ($CaptureHeight -lt 0) -or (($CaptureWidth -eq 0) -ne ($CaptureHeight -eq 0))) {
+    throw 'CaptureWidth and CaptureHeight must both be positive when specified.'
+}
+if ($CaptureFrame -ge 0 -and $CaptureOutput -eq '') {
+    $CaptureOutput = Join-Path $OutputDir ('capture_frame_{0:D6}.png' -f $CaptureFrame)
+}
+if ($CaptureFrame -ge 0) {
+    $NoRender = $false
+    $Headless = $false
+}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Set-RunMetadataEnv -ProjectRoot $ProjectRoot
@@ -97,6 +114,7 @@ $appArgs = @(
 )
 
 if ($NoRender) { $appArgs += '--no-render' }
+if ($Headless) { $appArgs += '--headless' }
 if ($Uncapped) { $appArgs += '--uncapped' }
 if ($SyncGpu) { $appArgs += '--sync-gpu' }
 if ($ProfileGpuQueries) { $appArgs += '--profile-gpu-queries' }
@@ -107,6 +125,8 @@ if ($QualityMetrics) { $appArgs += '--quality-metrics' }
 if ($QualityCheckpointStride -gt 0 -and ($ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '')) {
     $appArgs += @('--quality-checkpoint-stride', $QualityCheckpointStride)
 }
+if ($CaptureFrame -ge 0) { $appArgs += @('--capture-frame', $CaptureFrame, '--capture-output', [System.IO.Path]::GetFullPath($CaptureOutput)) }
+if ($CaptureWidth -gt 0) { $appArgs += @('--capture-resolution', $CaptureWidth, $CaptureHeight) }
 if ($ExtraArgs) { $appArgs += $ExtraArgs }
 
 $logPath = Join-Path $OutputDir 'benchmark_stdout.log'

@@ -27,6 +27,7 @@ results/
 *.nsys-rep
 *.ncu-rep
 *.sqlite
+__pycache__/
 
 # Local backup/corrupt folders and files
 GenPD/
