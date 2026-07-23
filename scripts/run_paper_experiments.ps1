@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectRoot = '',
-    [string]$RunLabel = 'paper-20260723-rendered',
+    [string]$RunLabel = 'paper-20260723-r2',
     [string]$RunRoot = '',
     [ValidateSet('manifest', 'reference', 'calibrate', 'performance', 'stability', 'capture', 'all')]
     [string]$Stage = 'all',
@@ -39,13 +39,25 @@ $variants = @(
     'gpu-gather-no-fusion',
     'gpu-gather-fusion',
     'gpu-gather-fusion-batched-ls',
+    'gpu-gather-fusion-batched-ls-persistent',
+    'gpu-xpbd-jacobi'
+)
+$ncgVariants = @(
+    'cpu-ncg',
+    'gpu-edge-scatter',
+    'gpu-gather-no-fusion',
+    'gpu-gather-fusion',
+    'gpu-gather-fusion-batched-ls',
     'gpu-gather-fusion-batched-ls-persistent'
 )
-$candidateBudgets = @(1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32)
+$candidateBudgets = @(1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64)
 $qualityFrames = 120
 $qualityWarmup = 20
 $qualityCheckpointStride = 10
 $qualityThreshold = 1e-3
+$xpbdMeanStrainThreshold = 0.02
+$xpbdMaxStrainThreshold = 0.10
+$xpbdPenetrationThreshold = 0.02
 $performanceFrames = 300
 $performanceWarmup = 30
 $performanceRepetitions = 3
@@ -98,7 +110,7 @@ function Write-Manifest {
     if ((Test-Path -LiteralPath $manifestPath) -and -not $Force) { return $manifestPath }
     $currentCommit = Get-ShortCommit
     $manifest = [ordered]@{
-        protocol_version = 1
+        protocol_version = 2
         label = $RunLabel
         created_utc = [DateTime]::UtcNow.ToString('o', $invariant)
         git_commit = $currentCommit
@@ -113,6 +125,12 @@ function Write-Manifest {
             warmup_frames = $qualityWarmup
             checkpoint_stride = $qualityCheckpointStride
             position_rel_l2_p95 = $qualityThreshold
+            ncg_position_rel_l2_p95 = $qualityThreshold
+            xpbd = [ordered]@{
+                p95_mean_stretch_strain = $xpbdMeanStrainThreshold
+                p95_max_stretch_strain = $xpbdMaxStrainThreshold
+                max_penetration_depth = $xpbdPenetrationThreshold
+            }
         }
         performance = [ordered]@{
             frames = $performanceFrames
@@ -146,6 +164,17 @@ function Write-Manifest {
             height = 900
             solver_variant = 'gpu-gather-fusion-batched-ls-persistent'
         }
+        validity_policy = [ordered]@{
+            invalid_frame_blocks_performance = $true
+            required_gather_scene = 'hanging'
+            required_gather_dimension = 386
+            required_gather_variants = @(
+                'gpu-gather-no-fusion',
+                'gpu-gather-fusion',
+                'gpu-gather-fusion-batched-ls',
+                'gpu-gather-fusion-batched-ls-persistent'
+            )
+        }
     }
     Write-Json -Path $manifestPath -Value $manifest
     return $manifestPath
@@ -163,16 +192,21 @@ function Get-CaseExtraArgs {
 function Test-RunComplete {
     param([string]$OutputDir, [int]$Frames, [int]$Warmup, [switch]$RequireQuality, [switch]$RequirePresentation)
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
+    $extendedPath = Join-Path $OutputDir 'frame_profile_extended.csv'
     $metadataPath = Join-Path $OutputDir 'run_metadata.json'
-    if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $metadataPath)) { return $false }
+    if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $extendedPath) -or -not (Test-Path -LiteralPath $metadataPath)) { return $false }
     $measured = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $Warmup })
-    if ($measured.Count -ne $Frames) { return $false }
+    $extended = @(Import-Csv -LiteralPath $extendedPath | Where-Object { [int]$_.frame -ge $Warmup })
+    if ($measured.Count -ne $Frames -or $extended.Count -ne $Frames) { return $false }
     foreach ($row in $measured) {
         if ($row.exploded -eq '1') { return $false }
         foreach ($field in @('total_ms', 'optimization_ms', 'gradient_norm', 'max_position')) {
             $number = Convert-ToInvariantDouble $row.$field
             if ($null -eq $number -or [double]::IsNaN($number) -or [double]::IsInfinity($number)) { return $false }
         }
+    }
+    foreach ($row in $extended) {
+        if ($row.frame_valid -ne '1' -or $row.termination_reason -ne 'none') { return $false }
     }
     if ($RequireQuality) {
         $qualityPath = Join-Path $OutputDir 'quality_metrics.csv'
@@ -203,15 +237,17 @@ function Test-RunComplete {
 function Test-CalibrationArtifactsComplete {
     param([string]$OutputDir, [int]$Frames, [int]$Warmup)
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
+    $extendedPath = Join-Path $OutputDir 'frame_profile_extended.csv'
     $qualityPath = Join-Path $OutputDir 'quality_metrics.csv'
     $presentationPath = Join-Path $OutputDir 'frame_presentation.csv'
     $metadataPath = Join-Path $OutputDir 'run_metadata.json'
-    if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $qualityPath) -or
+    if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $extendedPath) -or -not (Test-Path -LiteralPath $qualityPath) -or
         -not (Test-Path -LiteralPath $presentationPath) -or -not (Test-Path -LiteralPath $metadataPath)) { return $false }
     $profileRows = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $Warmup })
+    $extendedRows = @(Import-Csv -LiteralPath $extendedPath | Where-Object { [int]$_.frame -ge $Warmup })
     $presentationRows = @(Import-Csv -LiteralPath $presentationPath | Where-Object { [int]$_.frame -ge $Warmup })
     $qualityRows = @(Import-Csv -LiteralPath $qualityPath)
-    if ($profileRows.Count -ne $Frames -or $presentationRows.Count -ne $Frames -or $qualityRows.Count -eq 0) { return $false }
+    if ($profileRows.Count -ne $Frames -or $extendedRows.Count -ne $Frames -or $presentationRows.Count -ne $Frames -or $qualityRows.Count -eq 0) { return $false }
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ([bool]$metadata.benchmark.no_render -or -not [bool]$metadata.benchmark.sync_gpu -or -not [bool]$metadata.benchmark.disable_vsync) {
         return $false
@@ -245,32 +281,46 @@ function Get-QualitySummary {
     param([string]$OutputDir)
     $qualityPath = Join-Path $OutputDir 'quality_metrics.csv'
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
-    if (-not (Test-Path -LiteralPath $qualityPath) -or -not (Test-Path -LiteralPath $profilePath)) {
-        throw "Missing quality/profile output: $OutputDir"
+    $extendedPath = Join-Path $OutputDir 'frame_profile_extended.csv'
+    if (-not (Test-Path -LiteralPath $qualityPath) -or -not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $extendedPath)) {
+        throw "Missing quality/profile/validity output: $OutputDir"
     }
     $qualityRows = @(Import-Csv -LiteralPath $qualityPath | Where-Object { [int]$_.frame -ge $qualityWarmup })
     $profileRows = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $qualityWarmup })
-    $invalid = 0
+    $extendedRows = @(Import-Csv -LiteralPath $extendedPath | Where-Object { [int]$_.frame -ge $qualityWarmup })
+    $invalidFrames = [System.Collections.Generic.HashSet[string]]::new()
     $referenceRows = @()
     foreach ($row in $qualityRows) {
-        if ($row.finite -ne '1' -or $row.exploded -eq '1') { ++$invalid; continue }
+        if ($row.finite -ne '1' -or $row.exploded -eq '1') {
+            [void]$invalidFrames.Add([string]$row.frame)
+            continue
+        }
         if ($row.has_reference -eq '1') { $referenceRows += $row }
     }
     foreach ($row in $profileRows) {
-        if ($row.exploded -eq '1') { ++$invalid }
+        if ($row.exploded -eq '1') { [void]$invalidFrames.Add([string]$row.frame) }
+    }
+    $firstTermination = @($extendedRows | Where-Object { $_.frame_valid -ne '1' -or $_.termination_reason -ne 'none' } | Select-Object -First 1)
+    foreach ($row in $extendedRows) {
+        if ($row.frame_valid -ne '1' -or $row.termination_reason -ne 'none') { [void]$invalidFrames.Add([string]$row.frame) }
     }
     $position = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.position_rel_l2 } | Where-Object { $null -ne $_ })
     $velocity = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.velocity_rel_l2 } | Where-Object { $null -ne $_ })
     $energy = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.constraint_energy_rel_error } | Where-Object { $null -ne $_ })
+    $meanStrain = @($qualityRows | ForEach-Object { Convert-ToInvariantDouble $_.mean_stretch_strain } | Where-Object { $null -ne $_ })
+    $maxStrain = @($qualityRows | ForEach-Object { Convert-ToInvariantDouble $_.max_stretch_strain } | Where-Object { $null -ne $_ })
     $penetration = @($qualityRows | ForEach-Object { Convert-ToInvariantDouble $_.max_penetration_depth } | Where-Object { $null -ne $_ })
     return [pscustomobject]@{
         reference_rows = $referenceRows.Count
-        invalid_records = $invalid
+        invalid_records = $invalidFrames.Count
         p95_position_rel_l2 = Get-Percentile -Values $position -Percentile 0.95
         p95_velocity_rel_l2 = Get-Percentile -Values $velocity -Percentile 0.95
         p95_energy_rel_error = Get-Percentile -Values $energy -Percentile 0.95
+        p95_mean_stretch_strain = Get-Percentile -Values $meanStrain -Percentile 0.95
+        p95_max_stretch_strain = Get-Percentile -Values $maxStrain -Percentile 0.95
         max_penetration_depth = if ($penetration.Count -gt 0) { ($penetration | Measure-Object -Maximum).Maximum } else { $null }
-        failure_rate = if (($qualityRows.Count + $profileRows.Count) -gt 0) { [double]$invalid / [double]($qualityRows.Count + $profileRows.Count) } else { 1.0 }
+        failure_rate = if ($profileRows.Count -gt 0) { [double]$invalidFrames.Count / [double]$profileRows.Count } else { 1.0 }
+        termination_reason = if ($firstTermination.Count -gt 0) { $firstTermination[0].termination_reason } else { 'none' }
     }
 }
 
@@ -299,21 +349,34 @@ function Invoke-Calibration {
                             -ExtraArgs (Get-CaseExtraArgs -ClothDimension $dimension -ScenePath $scene.path)
                     }
                     $metrics = Get-QualitySummary -OutputDir $outputDir
-                    $qualified = $metrics.reference_rows -gt 0 -and $metrics.invalid_records -eq 0 -and `
+                    $isXPBD = $variant -eq 'gpu-xpbd-jacobi'
+                    $qualityGate = if ($isXPBD) { 'xpbd-strain-penetration' } else { 'ncg-reference-position' }
+                    $qualified = if ($isXPBD) {
+                        $metrics.invalid_records -eq 0 -and `
+                        $null -ne $metrics.p95_mean_stretch_strain -and $metrics.p95_mean_stretch_strain -le $xpbdMeanStrainThreshold -and `
+                        $null -ne $metrics.p95_max_stretch_strain -and $metrics.p95_max_stretch_strain -le $xpbdMaxStrainThreshold -and `
+                        $null -ne $metrics.max_penetration_depth -and $metrics.max_penetration_depth -le $xpbdPenetrationThreshold
+                    } else {
+                        $metrics.reference_rows -gt 0 -and $metrics.invalid_records -eq 0 -and `
                         $null -ne $metrics.p95_position_rel_l2 -and $metrics.p95_position_rel_l2 -le $qualityThreshold
+                    }
                     $row = [pscustomobject]@{
                         scene_id = $scene.id
                         scene_path = $scene.path
                         cloth_dimension = $dimension
                         solver_variant = $variant
                         iterations_per_frame = $budget
+                        quality_gate = $qualityGate
                         qualified = [int]$qualified
                         reference_rows = $metrics.reference_rows
                         p95_position_rel_l2 = $metrics.p95_position_rel_l2
                         p95_velocity_rel_l2 = $metrics.p95_velocity_rel_l2
                         p95_energy_rel_error = $metrics.p95_energy_rel_error
+                        p95_mean_stretch_strain = $metrics.p95_mean_stretch_strain
+                        p95_max_stretch_strain = $metrics.p95_max_stretch_strain
                         max_penetration_depth = $metrics.max_penetration_depth
                         failure_rate = $metrics.failure_rate
+                        termination_reason = $metrics.termination_reason
                         result_dir = $outputDir
                         reference_dir = $referenceDir
                     }
@@ -331,9 +394,39 @@ function Invoke-Calibration {
     } | Where-Object { $null -ne $_ })
     $selectedPath = Join-Path $RunRoot 'selected_budgets.csv'
     $selectedRows | Export-Csv -LiteralPath $selectedPath -NoTypeInformation
+    $validityRows = @($rows | Group-Object scene_id, cloth_dimension, solver_variant | ForEach-Object {
+        $group = @($_.Group | Sort-Object { [int]$_.iterations_per_frame })
+        $selection = @($group | Where-Object { $_.qualified -eq 1 } | Select-Object -First 1)
+        $invalid = @($group | Where-Object { $_.termination_reason -ne 'none' } | Select-Object -First 1)
+        $representative = if ($selection.Count -eq 1) { $selection[0] } elseif ($invalid.Count -eq 1) { $invalid[0] } else { $group[-1] }
+        [pscustomobject]@{
+            scene_id = $representative.scene_id
+            cloth_dimension = $representative.cloth_dimension
+            solver_variant = $representative.solver_variant
+            quality_gate = $representative.quality_gate
+            qualified = [int]($selection.Count -eq 1)
+            invalid = [int]($invalid.Count -eq 1)
+            selected_iterations_per_frame = if ($selection.Count -eq 1) { $selection[0].iterations_per_frame } else { '' }
+            termination_reason = if ($invalid.Count -eq 1) { $invalid[0].termination_reason } elseif ($selection.Count -eq 1) { 'none' } else { 'quality_gate_not_met' }
+            p95_position_rel_l2 = $representative.p95_position_rel_l2
+            p95_mean_stretch_strain = $representative.p95_mean_stretch_strain
+            p95_max_stretch_strain = $representative.p95_max_stretch_strain
+            max_penetration_depth = $representative.max_penetration_depth
+            result_dir = $representative.result_dir
+        }
+    })
+    $validityRows | Sort-Object scene_id, cloth_dimension, solver_variant | Export-Csv -LiteralPath (Join-Path $RunRoot 'validity_matrix.csv') -NoTypeInformation
+    $requiredGatherVariants = @($ncgVariants | Where-Object { $_ -ne 'cpu-ncg' -and $_ -ne 'gpu-edge-scatter' })
+    foreach ($requiredVariant in $requiredGatherVariants) {
+        $required = @($validityRows | Where-Object { $_.scene_id -eq 'hanging' -and [int]$_.cloth_dimension -eq 386 -and $_.solver_variant -eq $requiredVariant })
+        if ($required.Count -ne 1 -or $required[0].qualified -ne 1) {
+            throw "Required 386^2 hanging gather case failed its quality gate: $requiredVariant. See validity_matrix.csv."
+        }
+    }
     if ($selectedRows.Count -eq 0) { throw 'No calibration case met the equal-quality threshold.' }
     Write-Host "Calibration candidates: $calibrationPath"
     Write-Host "Selected equal-quality budgets: $selectedPath"
+    Write-Host "Validity matrix: $(Join-Path $RunRoot 'validity_matrix.csv')"
 }
 
 function Invoke-Performance {
@@ -383,8 +476,14 @@ function Invoke-Stability {
                         -ExtraArgs (Get-CaseExtraArgs -ClothDimension 256 -ScenePath 'scenes\moving_sphere_cloth.xml' -Timestep $dt -Stretch $stretch -Bending 20.0)
                 }
                 $profileRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })
+                $extendedRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile_extended.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })
                 $qualityRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'quality_metrics.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })
-                $invalid = @($profileRows | Where-Object { $_.exploded -eq '1' }).Count + @($qualityRows | Where-Object { $_.finite -ne '1' -or $_.exploded -eq '1' }).Count
+                if ($extendedRows.Count -ne $performanceFrames) { throw "Missing extended validity records: $outputDir" }
+                $invalidFrames = [System.Collections.Generic.HashSet[string]]::new()
+                foreach ($row in $profileRows) { if ($row.exploded -eq '1') { [void]$invalidFrames.Add([string]$row.frame) } }
+                foreach ($row in $qualityRows) { if ($row.finite -ne '1' -or $row.exploded -eq '1') { [void]$invalidFrames.Add([string]$row.frame) } }
+                foreach ($row in $extendedRows) { if ($row.frame_valid -ne '1' -or $row.termination_reason -ne 'none') { [void]$invalidFrames.Add([string]$row.frame) } }
+                $invalid = $invalidFrames.Count
                 $rows += [pscustomobject]@{
                     timestep = Format-Number $dt
                     stretch_stiffness = Format-Number $stretch
@@ -392,6 +491,7 @@ function Invoke-Stability {
                     repetition = $rep
                     stable = [int]($invalid -eq 0)
                     invalid_records = $invalid
+                    termination_reasons = (@($extendedRows | Where-Object { $_.termination_reason -ne 'none' } | Select-Object -ExpandProperty termination_reason -Unique) -join ';')
                     result_dir = $outputDir
                 }
             }

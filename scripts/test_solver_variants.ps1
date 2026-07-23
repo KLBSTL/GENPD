@@ -11,9 +11,16 @@ if (-not (Test-Path -LiteralPath $executablePath)) {
     throw "GenPD executable was not found: $executablePath"
 }
 
-$helpText = & $executablePath --help 2>&1 | Out-String
-if ($LASTEXITCODE -ne 0) {
-    throw "GenPD --help failed with exit code $LASTEXITCODE"
+Push-Location $ProjectRoot
+try {
+    $helpText = & $executablePath --help 2>&1 | Out-String
+    $helpExitCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+if ($helpExitCode -ne 0) {
+    throw "GenPD --help failed with exit code $helpExitCode"
 }
 
 if ($helpText -notmatch '--solver-variant') {

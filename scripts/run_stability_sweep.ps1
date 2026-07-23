@@ -1,7 +1,7 @@
 param(
     [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$RunLabel = ('stability-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
-    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-xpbd-jacobi')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [double[]]$Timesteps = @(0.01665, 0.0333, 0.05),
     [double[]]$StretchStiffnesses = @(40, 80, 160),

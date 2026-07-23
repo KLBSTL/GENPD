@@ -27,11 +27,17 @@ if (-not (Test-Path -LiteralPath $manifestPath)) {
 }
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.quality_target.position_rel_l2_p95 -ne 0.001 -or $manifest.performance.repetitions -ne 3 `
+if ($manifest.protocol_version -ne 2 -or $manifest.quality_target.position_rel_l2_p95 -ne 0.001 -or $manifest.performance.repetitions -ne 3 `
     -or $manifest.measurement.mode -ne 'rendered-end-to-end' `
     -or $manifest.measurement.primary_metric -ne 'frame_wall_ms' `
     -or $manifest.measurement.render_width -ne 1600 -or $manifest.measurement.render_height -ne 900) {
     throw 'Paper experiment manifest does not encode the approved protocol.'
+}
+if ($manifest.variants -notcontains 'gpu-xpbd-jacobi' -or $manifest.quality_target.xpbd.p95_max_stretch_strain -ne 0.1) {
+    throw 'Paper experiment manifest does not encode the GPU XPBD quality gate.'
+}
+if (-not [bool]$manifest.validity_policy.invalid_frame_blocks_performance -or $manifest.validity_policy.required_gather_dimension -ne 386) {
+    throw 'Paper experiment manifest does not encode the required gather validity policy.'
 }
 
 Write-Output "Paper experiment contract passed: $manifestPath"

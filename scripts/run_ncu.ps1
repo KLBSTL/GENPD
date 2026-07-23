@@ -3,10 +3,12 @@ param(
     [string]$RunLabel = 'smoke-ncu',
     [int]$Frames = 60,
     [int]$Warmup = 10,
-    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent')]
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-xpbd-jacobi')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [string]$OutputDir = '',
     [string]$ExePath = '',
+    [int]$RenderWidth = 1600,
+    [int]$RenderHeight = 900,
     [string]$NcuPath = 'C:\Program Files\NVIDIA Corporation\Nsight Compute 2025.3.1\target\windows-desktop-win7-x64\ncu.exe',
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -36,12 +38,27 @@ function Resolve-GenPDExe {
     throw "GenPD.exe not found. Build Release|x64 first or pass -ExePath."
 }
 
+function Set-RunMetadataEnv {
+    param([string]$ProjectRoot)
+    $commit = & git -c "safe.directory=$ProjectRoot" -C $ProjectRoot rev-parse --short HEAD 2>$null | Select-Object -First 1
+    if ($commit) { $env:GENPD_GIT_COMMIT = $commit.Trim() }
+    $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($nvidiaSmi) {
+        $driver = & nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1
+        $gpu = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1
+        if ($driver) { $env:GENPD_NVIDIA_DRIVER_VERSION = $driver.Trim() }
+        if ($gpu) { $env:GENPD_GPU_NAME = $gpu.Trim() }
+    }
+}
+
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
+if ($RenderWidth -lt 1 -or $RenderHeight -lt 1) { throw 'RenderWidth and RenderHeight must be positive.' }
 if ($OutputDir -eq '') {
     $OutputDir = Join-Path $ProjectRoot (Join-Path 'results' $RunLabel)
 }
 $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $ExePath = Resolve-GenPDExe -ProjectRoot $ProjectRoot -RequestedExePath $ExePath
+Set-RunMetadataEnv -ProjectRoot $ProjectRoot
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $reportDir = Join-Path $OutputDir 'nsight-compute'
@@ -63,8 +80,10 @@ $appArgs = @(
     '--solver-variant', $SolverVariant,
     '--frames', $Frames,
     '--warmup', $Warmup,
-    '--no-render',
     '--uncapped',
+    '--sync-gpu',
+    '--disable-vsync',
+    '--render-resolution', $RenderWidth, $RenderHeight,
     '--profile-gpu-queries'
 )
 if ($ExtraArgs) { $appArgs += $ExtraArgs }

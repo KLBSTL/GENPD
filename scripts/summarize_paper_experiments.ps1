@@ -14,9 +14,12 @@ if ($RunRoot -eq '') { $RunRoot = Join-Path $ProjectRoot 'results\paper-20260723
 $RunRoot = [System.IO.Path]::GetFullPath($RunRoot)
 $manifestPath = Join-Path $RunRoot 'manifest.json'
 $selectedPath = Join-Path $RunRoot 'selected_budgets.csv'
+$validityPath = Join-Path $RunRoot 'validity_matrix.csv'
 if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Missing manifest: $manifestPath" }
 if (-not (Test-Path -LiteralPath $selectedPath)) { throw "Missing selected equal-quality budgets: $selectedPath" }
+if (-not (Test-Path -LiteralPath $validityPath)) { throw "Missing explicit validity matrix: $validityPath" }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+if ([int]$manifest.protocol_version -ne 2) { throw 'Formal R2 summary requires protocol version 2.' }
 if ([int]$manifest.performance.repetitions -ne 3) { throw 'Formal performance protocol requires exactly three repetitions.' }
 if ([double]$manifest.quality_target.position_rel_l2_p95 -ne 0.001) { throw 'Unexpected equal-quality threshold in manifest.' }
 if ($manifest.measurement.mode -ne 'rendered-end-to-end' -or $manifest.measurement.primary_metric -ne 'frame_wall_ms') {
@@ -67,10 +70,11 @@ function Get-FieldValues {
 function Get-RequiredRows {
     param([string]$OutputDir, [int]$ExpectedFrames, [int]$Warmup)
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
+    $extendedPath = Join-Path $OutputDir 'frame_profile_extended.csv'
     $experimentPath = Join-Path $OutputDir 'frame_profile_experiment.csv'
     $presentationPath = Join-Path $OutputDir 'frame_presentation.csv'
     $metadataPath = Join-Path $OutputDir 'run_metadata.json'
-    foreach ($path in @($profilePath, $experimentPath, $presentationPath, $metadataPath)) {
+    foreach ($path in @($profilePath, $extendedPath, $experimentPath, $presentationPath, $metadataPath)) {
         if (-not (Test-Path -LiteralPath $path)) { throw "Required output is missing: $path" }
     }
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
@@ -81,10 +85,16 @@ function Get-RequiredRows {
         throw "Formal performance run did not use rendered, synchronized, vsync-disabled timing: $metadataPath"
     }
     $profileRows = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $Warmup })
+    $extendedRows = @(Import-Csv -LiteralPath $extendedPath | Where-Object { [int]$_.frame -ge $Warmup })
     $experimentRows = @(Import-Csv -LiteralPath $experimentPath | Where-Object { [int]$_.frame -ge $Warmup })
     $presentationRows = @(Import-Csv -LiteralPath $presentationPath | Where-Object { [int]$_.frame -ge $Warmup })
-    if ($profileRows.Count -ne $ExpectedFrames -or $experimentRows.Count -ne $ExpectedFrames -or $presentationRows.Count -ne $ExpectedFrames) {
-        throw "Unexpected measured-frame count in $OutputDir (profile=$($profileRows.Count), experiment=$($experimentRows.Count), presentation=$($presentationRows.Count), expected=$ExpectedFrames)."
+    if ($profileRows.Count -ne $ExpectedFrames -or $extendedRows.Count -ne $ExpectedFrames -or $experimentRows.Count -ne $ExpectedFrames -or $presentationRows.Count -ne $ExpectedFrames) {
+        throw "Unexpected measured-frame count in $OutputDir (profile=$($profileRows.Count), extended=$($extendedRows.Count), experiment=$($experimentRows.Count), presentation=$($presentationRows.Count), expected=$ExpectedFrames)."
+    }
+    foreach ($row in $extendedRows) {
+        if ($row.frame_valid -ne '1' -or $row.termination_reason -ne 'none') {
+            throw "Invalid extended-profile frame in formal performance run: $OutputDir"
+        }
     }
     foreach ($row in $profileRows) {
         if ($row.exploded -eq '1') { throw "Exploded frame in formal performance run: $OutputDir" }
@@ -100,11 +110,20 @@ function Get-RequiredRows {
             if ($null -eq (To-Double $row.$field)) { throw "Non-finite '$field' in presentation profile: $OutputDir" }
         }
     }
-    return [pscustomobject]@{ profile = $profileRows; experiment = $experimentRows; presentation = $presentationRows; metadata = $metadata }
+    return [pscustomobject]@{ profile = $profileRows; extended = $extendedRows; experiment = $experimentRows; presentation = $presentationRows; metadata = $metadata }
 }
 
 $selected = @(Import-Csv -LiteralPath $selectedPath)
 if ($selected.Count -eq 0) { throw 'No equal-quality case was selected.' }
+$validity = @(Import-Csv -LiteralPath $validityPath)
+$expectedValidityCount = @($manifest.scenes).Count * @($manifest.resolutions).Count * @($manifest.variants).Count
+if ($validity.Count -ne $expectedValidityCount) { throw "Validity matrix must contain $expectedValidityCount cases, found $($validity.Count)." }
+foreach ($case in $selected) {
+    $record = @($validity | Where-Object { $_.scene_id -eq $case.scene_id -and [int]$_.cloth_dimension -eq [int]$case.cloth_dimension -and $_.solver_variant -eq $case.solver_variant })
+    if ($record.Count -ne 1 -or $record[0].qualified -ne '1' -or $record[0].invalid -ne '0') {
+        throw "Performance includes a case without a valid quality selection: $($case.scene_id), $($case.cloth_dimension), $($case.solver_variant)"
+    }
+}
 $frameSummaryRows = @()
 $groupRows = @{}
 foreach ($case in $selected) {
