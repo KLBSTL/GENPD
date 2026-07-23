@@ -102,6 +102,7 @@ namespace
 	unsigned int g_cs_profile_xpbd_constraint_dispatches = 0;
 	unsigned int g_cs_profile_xpbd_apply_dispatches = 0;
 	unsigned int g_cs_profile_xpbd_collision_dispatches = 0;
+	unsigned int g_cs_profile_persistent_collision_dispatches = 0;
 	unsigned int g_cs_profile_host_readbacks = 0;
 	unsigned int g_cs_profile_solver_finish_calls = 0;
 	unsigned int g_cs_unit_step_shortcut_budget = 0;
@@ -482,6 +483,7 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_xpbd_constraint_dispatches = 0;
 		g_cs_profile_xpbd_apply_dispatches = 0;
 		g_cs_profile_xpbd_collision_dispatches = 0;
+		g_cs_profile_persistent_collision_dispatches = 0;
 		g_cs_profile_host_readbacks = 0;
 		g_cs_profile_solver_finish_calls = 0;
 		g_cs_prefetched_energy_valid = false;
@@ -1714,17 +1716,12 @@ bool Simulation::shouldUseCS2GpuState()
 		return false;
 	}
 
-	if (m_mesh->m_mesh_type != MESH_TYPE_CLOTH || m_mesh->m_vertices_number < kCSLargeClothVertexThreshold)
+	if (m_mesh->m_mesh_type != MESH_TYPE_CLOTH || m_mesh->m_vertices_number == 0)
 	{
 		return false;
 	}
 
 	if (m_step_mode || m_animation_enable_swinging || m_selected_handle_id >= 0 || m_selected_attachment_constraint != NULL)
-	{
-		return false;
-	}
-
-	if (m_processing_collision && m_scene && !m_scene->IsEmpty())
 	{
 		return false;
 	}
@@ -1821,10 +1818,40 @@ bool Simulation::finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_d
 
 	const GLuint group_count = (m_mesh->m_vertices_number + 255) / 256;
 
+	EnsureCSBufferStorage(csStateStatsID, static_cast<std::size_t>(group_count) * 2u * sizeof(float), g_cs_state_stats_buffer_bytes);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 20, csStateStatsID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 18, csPositionID);
 
+	if (m_processing_collision && m_scene && !m_scene->IsEmpty())
+	{
+		uploadCSCollisionPrimitives();
+		if (!m_cs_collision_primitives.empty())
+		{
+			ScopedCSDebugGroup collision_group("GenPD persistent-state collision resolve");
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, collisionPrimitiveID);
+			glUseProgram(collision_resolve_program);
+			static GLint collision_vertex_count_location = -1;
+			static GLint collision_primitive_count_location = -1;
+			static GLint collision_restitution_location = -1;
+			static GLint collision_friction_location = -1;
+			if (collision_vertex_count_location < 0)
+			{
+				collision_vertex_count_location = glGetUniformLocation(collision_resolve_program, "vertex_count");
+				collision_primitive_count_location = glGetUniformLocation(collision_resolve_program, "primitive_count");
+				collision_restitution_location = glGetUniformLocation(collision_resolve_program, "restitution_coefficient");
+				collision_friction_location = glGetUniformLocation(collision_resolve_program, "friction_coefficient");
+			}
+			glUniform1ui(collision_vertex_count_location, static_cast<GLuint>(m_mesh->m_vertices_number));
+			glUniform1ui(collision_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
+			glUniform1f(collision_restitution_location, static_cast<float>(m_restitution_coefficient));
+			glUniform1f(collision_friction_location, static_cast<float>(m_friction_coefficient));
+			++g_cs_profile_persistent_collision_dispatches;
+			glDispatchCompute(group_count, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+		}
+	}
 	glUseProgram(cs2_state_program);
 	static GLint mode_location = -1;
 	static GLint vertex_count_location = -1;
@@ -1839,15 +1866,34 @@ bool Simulation::finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_d
 		damping_location = glGetUniformLocation(cs2_state_program, "damping_coefficient");
 		acceleration_location = glGetUniformLocation(cs2_state_program, "acceleration");
 	}
-	glUniform1i(mode_location, 3);
+	glUniform1i(mode_location, 0);
 	glUniform1ui(vertex_count_location, static_cast<GLuint>(m_mesh->m_vertices_number));
 	glUniform1f(timestep_location, static_cast<float>(m_h));
 	glUniform1f(damping_location, static_cast<float>(m_damping_coefficient));
 	glUniform3f(acceleration_location, 0.0f, 0.0f, 0.0f);
 	glDispatchCompute(group_count, 1, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
 
+	std::vector<float> state_stats(static_cast<std::size_t>(group_count) * 2u, 0.0f);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, csStateStatsID);
+	++g_cs_profile_host_readbacks;
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, state_stats.size() * sizeof(float), state_stats.data());
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 	x_is_finite = true;
+	for (GLuint group = 0; group < group_count; ++group)
+	{
+		const ScalarType group_max_position = state_stats[static_cast<std::size_t>(group) * 2u];
+		const ScalarType group_max_displacement = state_stats[static_cast<std::size_t>(group) * 2u + 1u];
+		if (!std::isfinite(group_max_position) || !std::isfinite(group_max_displacement) || group_max_position >= 3.0e38f || group_max_displacement >= 3.0e38f)
+		{
+			x_is_finite = false;
+			max_position = 3.0e38f;
+			max_displacement = 3.0e38f;
+			break;
+		}
+		max_position = std::max(max_position, group_max_position);
+		max_displacement = std::max(max_displacement, group_max_displacement);
+	}
 
 	m_cs_cpu_state_stale = true;
 	m_cs_skip_cpu_damping_once = true;
@@ -2310,7 +2356,7 @@ static std::ofstream quality_profile_file;
 		experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2416,7 +2462,8 @@ initialized = true;
 			<< g_cs_profile_xpbd_apply_dispatches << ","
 			<< g_cs_profile_xpbd_collision_dispatches << ","
 			<< g_cs_xpbd_delta_buffer_bytes << ","
-			<< g_cs_xpbd_lambda_buffer_bytes << "\n";
+			<< g_cs_xpbd_lambda_buffer_bytes << ","
+			<< g_cs_profile_persistent_collision_dispatches << "\n";
 		experiment_profile_file.flush();
 
 }
@@ -4285,7 +4332,7 @@ void Simulation::integrateImplicitMethod()
 	}
 
 	m_last_profile_exploded = false;
-	const bool cs_stats_finite = !use_cs_ncg
+	const bool cs_stats_finite = !use_cs_ncg || use_cs_gpu_state
 		|| (std::isfinite(m_cs_gradient_norm_sq) && std::isfinite(m_cs_gradient_dot_descent));
 	if (!x_is_finite || !cs_stats_finite || max_position > 1e3f)
 	{
@@ -4351,7 +4398,7 @@ void Simulation::integrateImplicitMethod()
 			m_last_profile_objective_energy = 0.0;
 		}
 	}
-	m_last_profile_gradient_norm = use_cs_ncg ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : (xpbd_executed ? 0.0 : gradient_dir.norm());
+	m_last_profile_gradient_norm = (use_cs_ncg && !use_cs_gpu_state) ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : (xpbd_executed ? 0.0 : gradient_dir.norm());
 	m_last_profile_max_displacement = max_displacement;
 	m_last_profile_max_position = max_position;
 
