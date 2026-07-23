@@ -37,12 +37,19 @@ void main() {
 
     if (update_mode == 1) {
         if (idx == 0u) {
+            stats[3] += 1.0;
             float new_norm_sq = stats[0];
             float gradient_dot_old_descent = stats[1];
             float old_norm_sq = stats[2];
             float beta_gpu = (old_norm_sq > 1e-20) ? (new_norm_sq / old_norm_sq) : 0.0;
             float new_gradient_dot_descent = -new_norm_sq + beta_gpu * gradient_dot_old_descent;
-            if (isnan(new_gradient_dot_descent) || isinf(new_gradient_dot_descent) || new_gradient_dot_descent >= 0.0) {
+            bool restart = false;
+            if (_pad0 == 1 && _pad1 > 0) {
+                restart = (int(stats[3]) % _pad1) == 0;
+            } else if (_pad0 == 2) {
+                restart = isnan(new_gradient_dot_descent) || isinf(new_gradient_dot_descent) || new_gradient_dot_descent >= 0.0;
+            }
+            if (restart) {
                 beta_gpu = 0.0;
                 new_gradient_dot_descent = -new_norm_sq;
                 stats[5] += 1.0;
@@ -62,6 +69,7 @@ void main() {
     if (update_mode == 0 && idx == 0u) {
         stats[1] = -stats[0];
         stats[2] = stats[0];
+        stats[3] = 0.0;
         stats[4] = beta_value;
         stats[5] = 0.0;
     }

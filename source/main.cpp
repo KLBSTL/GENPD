@@ -135,6 +135,12 @@ ScalarType g_cli_timestep = static_cast<ScalarType>(-1);
 ScalarType g_cli_stretch_stiffness = static_cast<ScalarType>(-1);
 ScalarType g_cli_bending_stiffness = static_cast<ScalarType>(-1);
 int g_cli_cloth_dimension = 0;
+int g_cli_cloth_width = 0;
+int g_cli_cloth_height = 0;
+int g_cli_batched_ls_k = 0;
+ScalarType g_cli_armijo_beta = static_cast<ScalarType>(-1);
+std::string g_cli_ncg_restart_mode;
+int g_cli_ncg_restart_period = 0;
 std::string g_cli_verify_cs_gradient_dir;
 std::string g_cli_scene;
 int g_cli_capture_frame = -1;
@@ -281,6 +287,42 @@ int main(int argc, char ** argv)
 		std::cerr << "Warning: cannot set solver-variant metadata environment." << std::endl;
 	}
 std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
+if (g_cli_batched_ls_k > 0)
+{
+    g_simulation->SetBatchedLineSearchK(static_cast<unsigned int>(g_cli_batched_ls_k));
+}
+if (g_cli_armijo_beta > 0)
+{
+    if (g_cli_armijo_beta >= 1.0)
+    {
+        std::cerr << "--armijo-beta must be in (0, 1)." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    g_simulation->SetArmijoBeta(g_cli_armijo_beta);
+}
+if (!g_cli_ncg_restart_mode.empty())
+{
+    NCGRestartMode restart_mode = NCG_RESTART_NONE;
+    if (g_cli_ncg_restart_mode == "periodic")
+    {
+        restart_mode = NCG_RESTART_PERIODIC;
+    }
+    else if (g_cli_ncg_restart_mode == "non-descent")
+    {
+        restart_mode = NCG_RESTART_NON_DESCENT;
+    }
+    else if (g_cli_ncg_restart_mode != "none")
+    {
+        std::cerr << "Unknown --ncg-restart-mode: " << g_cli_ncg_restart_mode << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    g_simulation->SetNCGRestart(restart_mode, static_cast<unsigned int>(g_cli_ncg_restart_period));
+}
+else if (g_cli_ncg_restart_period > 0)
+{
+    std::cerr << "--ncg-restart-period requires --ncg-restart-mode periodic." << std::endl;
+    exit(EXIT_FAILURE);
+}
 if (g_cli_iterations_per_frame > 0)
 {
     g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
@@ -301,6 +343,11 @@ const std::string timestep_metadata = g_cli_timestep > 0 ? std::to_string(g_cli_
 const std::string stretch_metadata = g_cli_stretch_stiffness > 0 ? std::to_string(g_cli_stretch_stiffness) : std::string();
 const std::string bending_metadata = g_cli_bending_stiffness > 0 ? std::to_string(g_cli_bending_stiffness) : std::string();
 const std::string cloth_dimension_metadata = g_cli_cloth_dimension > 0 ? std::to_string(g_cli_cloth_dimension) : std::string();
+const std::string cloth_width_metadata = g_cli_cloth_width > 0 ? std::to_string(g_cli_cloth_width) : std::string();
+const std::string cloth_height_metadata = g_cli_cloth_height > 0 ? std::to_string(g_cli_cloth_height) : std::string();
+const std::string batched_ls_k_metadata = g_cli_batched_ls_k > 0 ? std::to_string(g_cli_batched_ls_k) : std::string();
+const std::string armijo_beta_metadata = g_cli_armijo_beta > 0 ? std::to_string(g_cli_armijo_beta) : std::string();
+const std::string ncg_restart_period_metadata = g_cli_ncg_restart_period > 0 ? std::to_string(g_cli_ncg_restart_period) : std::string();
 const bool quality_metrics_enabled = g_cli_quality_metrics || !reference_export_dir.empty() || !quality_reference_dir.empty();
 _putenv_s("GENPD_ITERATIONS_PER_FRAME", iterations_per_frame_metadata.c_str());
 _putenv_s("GENPD_REFERENCE_EXPORT_DIR", reference_export_dir.c_str());
@@ -311,6 +358,12 @@ _putenv_s("GENPD_TIMESTEP_OVERRIDE", timestep_metadata.c_str());
 _putenv_s("GENPD_STRETCH_STIFFNESS_OVERRIDE", stretch_metadata.c_str());
 _putenv_s("GENPD_BENDING_STIFFNESS_OVERRIDE", bending_metadata.c_str());
 _putenv_s("GENPD_CLOTH_DIMENSION_OVERRIDE", cloth_dimension_metadata.c_str());
+_putenv_s("GENPD_CLOTH_WIDTH_OVERRIDE", cloth_width_metadata.c_str());
+_putenv_s("GENPD_CLOTH_HEIGHT_OVERRIDE", cloth_height_metadata.c_str());
+_putenv_s("GENPD_BATCHED_LS_K", batched_ls_k_metadata.c_str());
+_putenv_s("GENPD_ARMIJO_BETA", armijo_beta_metadata.c_str());
+_putenv_s("GENPD_NCG_RESTART_MODE", g_cli_ncg_restart_mode.c_str());
+_putenv_s("GENPD_NCG_RESTART_PERIOD", ncg_restart_period_metadata.c_str());
 _putenv_s("GENPD_SCENE", selected_scene.c_str());
 // Configuration loading may reset the window size; CLI rendering dimensions win.
 if (g_cli_render_width > 0 && g_cli_render_height > 0)
@@ -967,6 +1020,30 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_cloth_dimension = parse_positive_int(argv[++i], g_cli_cloth_dimension);
         }
+        else if (arg == "--cloth-width" && i + 1 < argc)
+        {
+            g_cli_cloth_width = parse_positive_int(argv[++i], g_cli_cloth_width);
+        }
+        else if (arg == "--cloth-height" && i + 1 < argc)
+        {
+            g_cli_cloth_height = parse_positive_int(argv[++i], g_cli_cloth_height);
+        }
+        else if (arg == "--batched-ls-k" && i + 1 < argc)
+        {
+            g_cli_batched_ls_k = parse_positive_int(argv[++i], g_cli_batched_ls_k);
+        }
+        else if (arg == "--armijo-beta" && i + 1 < argc)
+        {
+            g_cli_armijo_beta = parse_positive_scalar(argv[++i], g_cli_armijo_beta);
+        }
+        else if (arg == "--ncg-restart-mode" && i + 1 < argc)
+        {
+            g_cli_ncg_restart_mode = argv[++i];
+        }
+        else if (arg == "--ncg-restart-period" && i + 1 < argc)
+        {
+            g_cli_ncg_restart_period = parse_positive_int(argv[++i], g_cli_ncg_restart_period);
+        }
         else if (arg == "--verify-cs-gradient" && i + 1 < argc)
         {
             g_cli_verify_cs_gradient_dir = argv[++i];
@@ -1036,6 +1113,12 @@ void parse_command_line(int argc, char** argv)
                 << "  --stretch-stiffness FLOAT   Override cloth stretch stiffness for this run.\n"
                 << "  --bending-stiffness FLOAT   Override cloth bending stiffness for this run.\n"
                 << "  --cloth-dimension N         Override square cloth resolution for this run.\n"
+                << "  --cloth-width N             Override cloth grid width.\n"
+                << "  --cloth-height N            Override cloth grid height.\n"
+                << "  --batched-ls-k N            Set batched Armijo candidate count.\n"
+                << "  --armijo-beta FLOAT         Set Armijo backtracking factor in (0,1).\n"
+                << "  --ncg-restart-mode MODE     none | periodic | non-descent.\n"
+                << "  --ncg-restart-period N      Period for periodic NCG restart.\n"
                 << "  --verify-cs-gradient PATH  Export CPU/edge/gather gradient diagnostics and exit.\n"
                 << "  --scene PATH                Load a scene XML file relative to project root.\n"
                 << "  --capture-frame N           Capture rendered benchmark frame N.\n"
@@ -1337,6 +1420,14 @@ void apply_cli_simulation_overrides()
 	{
 		g_mesh->m_dim[0] = static_cast<unsigned int>(g_cli_cloth_dimension);
 		g_mesh->m_dim[1] = static_cast<unsigned int>(g_cli_cloth_dimension);
+	}
+	if (g_cli_cloth_width > 0)
+	{
+		g_mesh->m_dim[0] = static_cast<unsigned int>(g_cli_cloth_width);
+	}
+	if (g_cli_cloth_height > 0)
+	{
+		g_mesh->m_dim[1] = static_cast<unsigned int>(g_cli_cloth_height);
 	}
 	if (g_cli_timestep > 0)
 	{

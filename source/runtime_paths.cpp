@@ -434,7 +434,15 @@ void GenPDWriteRunMetadata(
 	out << "    \"stretch_stiffness\": \"" << JsonEscape(EnvValue("GENPD_STRETCH_STIFFNESS_OVERRIDE")) << "\",\n";
 	out << "    \"bending_stiffness\": \"" << JsonEscape(EnvValue("GENPD_BENDING_STIFFNESS_OVERRIDE")) << "\",\n";
 	out << "    \"cloth_dimension\": \"" << JsonEscape(EnvValue("GENPD_CLOTH_DIMENSION_OVERRIDE")) << "\",\n";
+	out << "    \"cloth_width\": \"" << JsonEscape(EnvValue("GENPD_CLOTH_WIDTH_OVERRIDE")) << "\",\n";
+	out << "    \"cloth_height\": \"" << JsonEscape(EnvValue("GENPD_CLOTH_HEIGHT_OVERRIDE")) << "\",\n";
 	out << "    \"scene\": \"" << JsonEscape(EnvValue("GENPD_SCENE")) << "\"\n";
+	out << "  },\n";
+	out << "  \"solver_controls\": {\n";
+	out << "    \"batched_ls_k\": \"" << JsonEscape(EnvValue("GENPD_BATCHED_LS_K")) << "\",\n";
+	out << "    \"armijo_beta\": \"" << JsonEscape(EnvValue("GENPD_ARMIJO_BETA")) << "\",\n";
+	out << "    \"ncg_restart_mode\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_MODE")) << "\",\n";
+	out << "    \"ncg_restart_period\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_PERIOD")) << "\"\n";
 	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";

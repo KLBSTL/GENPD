@@ -577,6 +577,7 @@ m_quality_checkpoint_stride = 1;
 	m_last_profile_converged = false;
 	m_last_profile_exploded = false;
 	m_last_profile_termination_reason = "none";
+	m_last_profile_ncg_restarts = 0;
 	m_last_profile_iterations = 0;
 	m_last_profile_front_ms = 0.0;
 	m_last_profile_transfer_ms = 0.0;
@@ -600,6 +601,10 @@ m_quality_checkpoint_stride = 1;
 
 	m_cs_gradient_norm_sq = 0.0;
 	m_cs_gradient_dot_descent = 0.0;
+	m_cs_ncg_restart_count = 0;
+	m_batched_ls_k = 8u;
+	m_ncg_restart_mode = NCG_RESTART_NON_DESCENT;
+	m_ncg_restart_period = 0u;
 	m_cs_edge_buffer_dirty = true;
 	m_cs_render_position_valid = false;
 	m_cs_gpu_state_valid = false;
@@ -749,7 +754,7 @@ void Simulation::syncCSParams()
 
 	comp_params.t0 = 1.0f;
 	comp_params.beta = static_cast<float>(m_ls_beta);
-	comp_params.K = 8;
+	comp_params.K = static_cast<int>(std::max(1u, m_batched_ls_k));
 	comp_params.stiffness = static_cast<int>(m_stiffness_stretch);
 	comp_params.edge_size = static_cast<int>(m_mesh->my_edge.size());
 	comp_params.alpha = static_cast<float>(m_ls_alpha);
@@ -764,8 +769,8 @@ void Simulation::syncCSParams()
 			++comp_params.attachment_size;
 		}
 	}
-	comp_params._pad0 = 0;
-	comp_params._pad1 = 0;
+	comp_params._pad0 = static_cast<int>(m_ncg_restart_mode);
+	comp_params._pad1 = static_cast<int>(m_ncg_restart_period);
 
 	if (pUBO == 0)
 	{
@@ -1226,7 +1231,7 @@ void Simulation::dispatchCSGradient(bool pure_constraint_only, bool profile_grad
 }
 ScalarType Simulation::readCSStatsFromGPU(bool profile_readback)
 {
-	ScalarType stats[2] = { 0, 0 };
+	ScalarType stats[6] = { 0, 0, 0, 0, 0, 0 };
 	++g_cs_profile_host_readbacks;
 	TimerWrapper t_stats_readback;
 	if (profile_readback)
@@ -1244,6 +1249,9 @@ ScalarType Simulation::readCSStatsFromGPU(bool profile_readback)
 	}
 	m_cs_gradient_norm_sq = stats[0];
 	m_cs_gradient_dot_descent = stats[1];
+	m_cs_ncg_restart_count = stats[5] > 0.0
+		? static_cast<unsigned int>(stats[5] + 0.5)
+		: 0u;
 	return stats_readback_ms;
 }
 
@@ -1894,6 +1902,7 @@ void Simulation::Reset()
 
 		m_cs_gradient_norm_sq = 0.0;
 		m_cs_gradient_dot_descent = 0.0;
+		m_cs_ncg_restart_count = 0;
 		m_cs_edge_buffer_dirty = true;
 		invalidateCS2GpuState();
 		uploadCSResourcesIfNeeded();
@@ -2101,6 +2110,38 @@ void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir
     }
 }
 
+void Simulation::SetBatchedLineSearchK(unsigned int candidate_count)
+{
+	m_batched_ls_k = std::max(1u, candidate_count);
+	if (use_cs && m_mesh)
+	{
+		syncCSParams();
+	}
+}
+
+void Simulation::SetArmijoBeta(ScalarType beta)
+{
+	if (beta <= 0.0 || beta >= 1.0)
+	{
+		return;
+	}
+	m_ls_beta = beta;
+	if (use_cs && m_mesh)
+	{
+		syncCSParams();
+	}
+}
+
+void Simulation::SetNCGRestart(NCGRestartMode mode, unsigned int period)
+{
+	m_ncg_restart_mode = mode;
+	m_ncg_restart_period = mode == NCG_RESTART_PERIODIC ? std::max(1u, period) : 0u;
+	if (use_cs && m_mesh)
+	{
+		syncCSParams();
+	}
+}
+
 void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant)
 {
 	if (!m_profile_logging_enabled)
@@ -2129,7 +2170,7 @@ static std::ofstream quality_profile_file;
 		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (extended_profile_file.is_open())
 		{
-			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts\n";
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts\n";
 			extended_profile_file.flush();
 		}
 		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
@@ -2213,7 +2254,8 @@ initialized = true;
 			<< m_last_profile_objective_energy << ","
 			<< g_cs_profile_full_linesearch_calls << ","
 			<< g_cs_profile_skipped_linesearch_calls << ","
-			<< g_cs_profile_unit_step_accepts << "\n";
+			<< g_cs_profile_unit_step_accepts << ","
+			<< m_last_profile_ncg_restarts << "\n";
 		extended_profile_file.flush();
 	}
 
@@ -3760,6 +3802,8 @@ void Simulation::integrateImplicitMethod()
 	}
 	m_cs_render_position_valid = false;
 	m_last_profile_termination_reason = "none";
+	m_last_profile_ncg_restarts = 0;
+	m_cs_ncg_restart_count = 0;
 	// take a initial guess
 	VectorX x = m_y;
 	//VectorX x = m_mesh->m_current_positions;
@@ -4128,6 +4172,7 @@ void Simulation::integrateImplicitMethod()
 
 	m_last_profile_used_cs_ncg = use_cs_ncg;
 	m_last_profile_converged = converge;
+	m_last_profile_ncg_restarts = use_cs_ncg ? m_cs_ncg_restart_count : 0u;
 	m_last_profile_iterations = m_current_iteration;
 	m_last_profile_front_ms = myti.DurationInSeconds() * 1000.0;
 	m_last_profile_transfer_ms = transtime.DurationInSeconds() * 1000.0;

@@ -101,6 +101,13 @@ typedef enum
 	LS_TYPE_TOTAL_NUM,
 } LinesearchType;
 
+typedef enum
+{
+	NCG_RESTART_NONE = 0,
+	NCG_RESTART_PERIODIC = 1,
+	NCG_RESTART_NON_DESCENT = 2
+} NCGRestartMode;
+
 
 struct alignas(16) ParamsUBO {
 	float t0;  // 0
@@ -245,6 +252,9 @@ void ConfigureQualityMetrics(const std::string& reference_export_dir, const std:
 inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
 inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
 	bool VerifyCSGradient(const std::string& output_dir);
+	void SetBatchedLineSearchK(unsigned int candidate_count);
+	void SetArmijoBeta(ScalarType beta);
+	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
 protected:
 
 	// simulation constants
@@ -338,6 +348,9 @@ protected:
 	ScalarType m_ls_alpha;
 	ScalarType m_ls_beta;
 	ScalarType m_ls_step_size;
+	unsigned int m_batched_ls_k;
+	NCGRestartMode m_ncg_restart_mode;
+	unsigned int m_ncg_restart_period;
 	// prefetched instructions in linesearch
 	bool m_ls_is_first_iteration;
 	VectorX m_ls_prefetched_gradient;
@@ -412,6 +425,7 @@ unsigned int m_quality_checkpoint_stride;
 	bool m_last_profile_converged;
 	bool m_last_profile_exploded;
 	std::string m_last_profile_termination_reason;
+	unsigned int m_last_profile_ncg_restarts;
 	unsigned int m_last_profile_iterations;
 	ScalarType m_last_profile_front_ms;
 	ScalarType m_last_profile_transfer_ms;
@@ -468,6 +482,7 @@ unsigned int m_quality_checkpoint_stride;
 	std::vector<ScalarType> m_cs_mass_diagonal;
 	ScalarType m_cs_gradient_norm_sq;
 	ScalarType m_cs_gradient_dot_descent;
+	unsigned int m_cs_ncg_restart_count;
 	bool m_cs_edge_buffer_dirty;
 
 	bool li_test = true;
