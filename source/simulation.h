@@ -244,7 +244,7 @@ void ConfigureQualityMetrics(const std::string& reference_export_dir, const std:
 	}
 inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
 inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
-
+	bool VerifyCSGradient(const std::string& output_dir);
 protected:
 
 	// simulation constants
@@ -411,6 +411,7 @@ unsigned int m_quality_checkpoint_stride;
 	bool m_last_profile_used_cs_ncg;
 	bool m_last_profile_converged;
 	bool m_last_profile_exploded;
+	std::string m_last_profile_termination_reason;
 	unsigned int m_last_profile_iterations;
 	ScalarType m_last_profile_front_ms;
 	ScalarType m_last_profile_transfer_ms;
@@ -1161,6 +1162,7 @@ private:
 	void Create_SSBO();
 	void syncCSParams();
 	void rebuildCSAdjacency();
+	bool validateCSAdjacency(std::string& reason) const;
 	void uploadCSResourcesIfNeeded();
 	void uploadCSCollisionPrimitives();
 	bool shouldUseCS2GpuState();

@@ -15,14 +15,14 @@ The result files contain a per-run `run_metadata.json`, raw frame CSV files, the
 
 Each CPU and GPU variant was calibrated against CPU NCG at 100 iterations per frame. The reference uses 20 warm-up and 120 measured frames, with checkpoints every ten frames. Candidate iteration budgets are `1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32`. A candidate qualifies only when its P95 relative position L2 error is at most `1e-3`, it has reference samples, and it has no non-finite state or explosion.
 
-There are 32 qualified scene-resolution-variant selections. The following four `386^2` hanging-cloth gather variants did not qualify at any tested budget and deliberately have no equal-quality performance ranking:
+There are 32 qualified scene-resolution-variant selections. A post-hoc audit found that the following four `386^2` hanging-cloth gather variants were not ordinary quality-gate misses: every tested budget terminated with an `E0: frame-0 explosion`. They have no equal-quality performance ranking:
 
 - `gpu-gather-no-fusion`
 - `gpu-gather-fusion`
 - `gpu-gather-fusion-batched-ls`
 - `gpu-gather-fusion-batched-ls-persistent`
 
-All qualified selected configurations have calibration failure rate zero. The formal paper plots label the four omitted configurations `NQ`; they are not replaced with extrapolated timing values.
+All qualified selected configurations have calibration failure rate zero. The legacy plots and any `NQ` labels are historical only and must not be used as positive performance evidence. The replacement validity matrix labels these cases `E0`, rather than concealing an invalid state behind a generic non-qualification marker.
 
 ## Stability Result
 

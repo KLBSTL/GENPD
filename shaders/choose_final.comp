@@ -111,6 +111,9 @@ void main() {
         candidate_step *= beta;
     }
 
+    // A rejected Armijo search must not silently advance the iterate.
+    step = 0.0;
+
     if (write_fallback_dispatch != 0) {
         write_indirect(dispatch_group_count);
     }

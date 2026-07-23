@@ -35,6 +35,7 @@
 #include <exception>
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 
 #include <Eigen/Eigenvalues>
 
@@ -575,6 +576,7 @@ m_quality_checkpoint_stride = 1;
 	m_last_profile_used_cs_ncg = false;
 	m_last_profile_converged = false;
 	m_last_profile_exploded = false;
+	m_last_profile_termination_reason = "none";
 	m_last_profile_iterations = 0;
 	m_last_profile_front_ms = 0.0;
 	m_last_profile_transfer_ms = 0.0;
@@ -851,6 +853,19 @@ void Simulation::rebuildCSAdjacency()
 	}
 
 	const unsigned int vertex_count = static_cast<unsigned int>(m_mesh->m_vertices_number);
+	for (unsigned int edge_index = 0; edge_index < m_mesh->my_edge.size(); ++edge_index)
+	{
+		const Edge& edge = m_mesh->my_edge[edge_index];
+		if (edge.m_v1 >= vertex_count || edge.m_v2 >= vertex_count)
+		{
+			throw std::runtime_error("Invalid vertex index while building compute-shader adjacency.");
+		}
+		if (edge.fixed_point == 1 && edge.m_v2 != edge.m_v1)
+		{
+			throw std::runtime_error("Attachment edge must reference exactly one constrained vertex.");
+		}
+	}
+
 	m_cs_vertex_edge_offsets.assign(vertex_count + 1, 0u);
 
 	unsigned int adjacency_count = 0;
@@ -883,6 +898,12 @@ void Simulation::rebuildCSAdjacency()
 		}
 	}
 
+	std::string adjacency_reason;
+	if (!validateCSAdjacency(adjacency_reason))
+	{
+		throw std::runtime_error("Invalid compute-shader adjacency: " + adjacency_reason);
+	}
+
 	m_cs_mass_diagonal.resize(m_mesh->m_system_dimension);
 	for (unsigned int i = 0; i < m_cs_mass_diagonal.size(); ++i)
 	{
@@ -890,6 +911,88 @@ void Simulation::rebuildCSAdjacency()
 	}
 }
 
+bool Simulation::validateCSAdjacency(std::string& reason) const
+{
+	reason.clear();
+	if (!m_mesh)
+	{
+		reason = "mesh is null";
+		return false;
+	}
+
+	const unsigned int vertex_count = static_cast<unsigned int>(m_mesh->m_vertices_number);
+	const std::vector<Edge>& edges = m_mesh->my_edge;
+	if (m_cs_vertex_edge_offsets.size() != static_cast<std::size_t>(vertex_count) + 1u)
+	{
+		reason = "offset count does not match vertex count";
+		return false;
+	}
+	if (m_cs_vertex_edge_offsets.empty() || m_cs_vertex_edge_offsets.front() != 0u)
+	{
+		reason = "CSR offsets do not start at zero";
+		return false;
+	}
+	if (m_cs_vertex_edge_offsets.back() != m_cs_vertex_edge_indices.size())
+	{
+		reason = "CSR terminal offset does not match adjacency count";
+		return false;
+	}
+
+	for (unsigned int vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+	{
+		if (m_cs_vertex_edge_offsets[vertex_index] > m_cs_vertex_edge_offsets[vertex_index + 1u])
+		{
+			reason = "CSR offsets are not monotonic";
+			return false;
+		}
+	}
+
+	std::vector<unsigned int> occurrence_count(edges.size(), 0u);
+	for (unsigned int vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
+	{
+		const unsigned int begin_offset = m_cs_vertex_edge_offsets[vertex_index];
+		const unsigned int end_offset = m_cs_vertex_edge_offsets[vertex_index + 1u];
+		for (unsigned int offset = begin_offset; offset < end_offset; ++offset)
+		{
+			const unsigned int edge_index = m_cs_vertex_edge_indices[offset];
+			if (edge_index >= edges.size())
+			{
+				reason = "CSR references an out-of-range edge";
+				return false;
+			}
+
+			const Edge& edge = edges[edge_index];
+			if (edge.m_v1 >= vertex_count || edge.m_v2 >= vertex_count)
+			{
+				reason = "edge references an out-of-range vertex";
+				return false;
+			}
+			const bool is_attachment = edge.fixed_point == 1;
+			const bool incident = is_attachment
+				? (edge.m_v1 == vertex_index && edge.m_v2 == edge.m_v1)
+				: (edge.m_v1 == vertex_index || edge.m_v2 == vertex_index);
+			if (!incident)
+			{
+				reason = "CSR edge is stored under a non-incident vertex";
+				return false;
+			}
+			++occurrence_count[edge_index];
+		}
+	}
+
+	for (unsigned int edge_index = 0; edge_index < edges.size(); ++edge_index)
+	{
+		const Edge& edge = edges[edge_index];
+		const unsigned int expected_occurrences = (edge.fixed_point == 1 || edge.m_v1 == edge.m_v2) ? 1u : 2u;
+		if (occurrence_count[edge_index] != expected_occurrences)
+		{
+			reason = "edge incidence multiplicity is incorrect";
+			return false;
+		}
+	}
+
+	return true;
+}
 void Simulation::uploadCSResourcesIfNeeded()
 {
 	if (!use_cs || !m_mesh)
@@ -1177,6 +1280,197 @@ void Simulation::updateCSStats(bool readback)
 	}
 }
 
+bool Simulation::VerifyCSGradient(const std::string& output_dir)
+{
+	if (!use_cs || !m_mesh || sizeof(ScalarType) != sizeof(float))
+	{
+		std::cerr << "Compute-shader gradient verification requires an initialized single-precision GPU simulation." << std::endl;
+		return false;
+	}
+	if (!GenPDEnsureDirectory(output_dir))
+	{
+		std::cerr << "Cannot create gradient verification directory: " << output_dir << std::endl;
+		return false;
+	}
+
+	if (m_cs_cpu_state_stale)
+	{
+		syncCS2GpuStateToCPU();
+	}
+	calculateExternalForce();
+	computeConstantVectorsYandZ();
+	uploadCSResourcesIfNeeded();
+
+	std::string csr_reason;
+	if (!validateCSAdjacency(csr_reason))
+	{
+		std::cerr << "Compute-shader adjacency verification failed: " << csr_reason << std::endl;
+		return false;
+	}
+	if (m_cs_mass_diagonal.size() != static_cast<std::size_t>(m_mesh->m_system_dimension))
+	{
+		std::cerr << "Compute-shader mass diagonal has an unexpected size." << std::endl;
+		return false;
+	}
+
+	VectorX x = m_y;
+	const ScalarType probe_scale = static_cast<ScalarType>(1e-3);
+	for (unsigned int vertex_index = 0; vertex_index < m_mesh->m_vertices_number; ++vertex_index)
+	{
+		const unsigned int base = vertex_index * 3u;
+		x[base] += probe_scale * static_cast<ScalarType>(static_cast<int>(vertex_index % 5u) - 2);
+		x[base + 1u] += probe_scale * static_cast<ScalarType>(static_cast<int>(vertex_index % 7u) - 3);
+		x[base + 2u] += probe_scale * static_cast<ScalarType>(static_cast<int>(vertex_index % 11u) - 5);
+	}
+	VectorX cpu_constraint(m_mesh->m_system_dimension);
+	cpu_constraint.setZero();
+	for (std::vector<Edge>::const_iterator edge_it = m_mesh->my_edge.begin(); edge_it != m_mesh->my_edge.end(); ++edge_it)
+	{
+		const Edge& edge = *edge_it;
+		const EigenVector3 xi = x.block_vector(edge.m_v1);
+		const ScalarType stiffness = static_cast<ScalarType>(edge.stiffness);
+		if (edge.fixed_point == 1)
+		{
+			cpu_constraint.block_vector(edge.m_v1) += stiffness * (xi - GLM2Eigen(glm::vec3(edge.fixed_)));
+			continue;
+		}
+
+		const EigenVector3 diff = xi - x.block_vector(edge.m_v2);
+		const ScalarType diff_sq_norm = diff.squaredNorm();
+		if (diff_sq_norm > static_cast<ScalarType>(1e-20))
+		{
+			const EigenVector3 contribution = stiffness * (1.0 - static_cast<ScalarType>(edge.rest_length) / std::sqrt(diff_sq_norm)) * diff;
+			cpu_constraint.block_vector(edge.m_v1) += contribution;
+			cpu_constraint.block_vector(edge.m_v2) -= contribution;
+		}
+	}
+
+	VectorX cpu_gradient(m_mesh->m_system_dimension);
+	const ScalarType h_sq = m_h * m_h;
+	for (unsigned int component = 0; component < m_mesh->m_system_dimension; ++component)
+	{
+		cpu_gradient[component] = m_cs_mass_diagonal[component] * (x[component] - m_y[component]) + h_sq * cpu_constraint[component];
+	}
+	const VectorX descent = -cpu_gradient;
+
+	const std::size_t vector_buffer_bytes = static_cast<std::size_t>(m_mesh->m_system_dimension) * sizeof(ScalarType);
+	EnsureCSBufferStorage(gradientID, vector_buffer_bytes, g_cs_gradient_buffer_bytes);
+	EnsureCSBufferStorage(DescentID, vector_buffer_bytes, g_cs_descent_buffer_bytes);
+	EnsureCSBufferStorage(xID, vector_buffer_bytes, g_cs_x_buffer_bytes);
+	EnsureCSBufferStorage(m_yID, vector_buffer_bytes, g_cs_y_buffer_bytes);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, x.data());
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_yID);
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_y.data());
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, DescentID);
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, descent.data());
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, DescentID);
+
+	struct GradientSnapshot
+	{
+		VectorX gradient;
+		ScalarType norm_sq;
+		ScalarType gradient_dot_descent;
+		bool finite;
+	};
+	auto collect_snapshot = [&](GenPDExperimentVariant variant)
+	{
+		GenPDSetExperimentVariant(variant);
+		dispatchCSGradient(false, false);
+		updateCSStats(true);
+		GradientSnapshot snapshot;
+		snapshot.gradient.resize(m_mesh->m_system_dimension);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, gradientID);
+		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, snapshot.gradient.data());
+		glFinish();
+		snapshot.norm_sq = m_cs_gradient_norm_sq;
+		snapshot.gradient_dot_descent = m_cs_gradient_dot_descent;
+		snapshot.finite = GenPDVectorIsFinite(snapshot.gradient)
+			&& std::isfinite(snapshot.norm_sq)
+			&& std::isfinite(snapshot.gradient_dot_descent);
+		return snapshot;
+	};
+
+	const GenPDExperimentVariant original_variant = GenPDGetExperimentVariant();
+	const ScalarType original_norm_sq = m_cs_gradient_norm_sq;
+	const ScalarType original_gradient_dot_descent = m_cs_gradient_dot_descent;
+	const GradientSnapshot edge_scatter = collect_snapshot(GENPD_VARIANT_GPU_EDGE_SCATTER);
+	const GradientSnapshot gather = collect_snapshot(GENPD_VARIANT_GPU_GATHER_FUSION);
+	GenPDSetExperimentVariant(original_variant);
+	m_cs_gradient_norm_sq = original_norm_sq;
+	m_cs_gradient_dot_descent = original_gradient_dot_descent;
+
+	auto relative_l2 = [](const VectorX& value, const VectorX& reference)
+	{
+		return (value - reference).norm() / std::max(reference.norm(), static_cast<ScalarType>(1e-12));
+	};
+	auto max_abs_error = [](const VectorX& value, const VectorX& reference)
+	{
+		return (value - reference).cwiseAbs().maxCoeff();
+	};
+	auto relative_scalar_error = [](ScalarType value, ScalarType reference)
+	{
+		return std::abs(value - reference) / std::max(std::abs(reference), static_cast<ScalarType>(1e-12));
+	};
+
+	const ScalarType cpu_norm_sq = cpu_gradient.squaredNorm();
+	const ScalarType cpu_gradient_dot_descent = cpu_gradient.dot(descent);
+	const ScalarType edge_relative_l2 = relative_l2(edge_scatter.gradient, cpu_gradient);
+	const ScalarType gather_relative_l2 = relative_l2(gather.gradient, cpu_gradient);
+	const ScalarType edge_max_abs = max_abs_error(edge_scatter.gradient, cpu_gradient);
+	const ScalarType gather_max_abs = max_abs_error(gather.gradient, cpu_gradient);
+	const ScalarType edge_norm_relative = relative_scalar_error(edge_scatter.norm_sq, cpu_norm_sq);
+	const ScalarType gather_norm_relative = relative_scalar_error(gather.norm_sq, cpu_norm_sq);
+	const ScalarType edge_dot_relative = relative_scalar_error(edge_scatter.gradient_dot_descent, cpu_gradient_dot_descent);
+	const ScalarType gather_dot_relative = relative_scalar_error(gather.gradient_dot_descent, cpu_gradient_dot_descent);
+	const bool pass = edge_scatter.finite && gather.finite
+		&& edge_relative_l2 <= static_cast<ScalarType>(1e-4)
+		&& gather_relative_l2 <= static_cast<ScalarType>(1e-4)
+		&& edge_norm_relative <= static_cast<ScalarType>(1e-4)
+		&& gather_norm_relative <= static_cast<ScalarType>(1e-4)
+		&& edge_dot_relative <= static_cast<ScalarType>(1e-4)
+		&& gather_dot_relative <= static_cast<ScalarType>(1e-4);
+
+	const std::string csv_path = output_dir + "\\gradient_verification.csv";
+	std::ofstream csv(csv_path.c_str(), std::ios::out | std::ios::trunc);
+	if (csv)
+	{
+		csv << "implementation,finite,relative_l2_to_cpu,max_abs_to_cpu,norm_sq,gradient_dot_descent,norm_sq_relative_error,gdotd_relative_error\n";
+		csv << "cpu-spring-attachment-inertia,"
+			<< (GenPDVectorIsFinite(cpu_gradient) ? 1 : 0) << ",0,0,"
+			<< cpu_norm_sq << "," << cpu_gradient_dot_descent << ",0,0\n";
+		csv << "gpu-edge-scatter," << (edge_scatter.finite ? 1 : 0) << ","
+			<< edge_relative_l2 << "," << edge_max_abs << "," << edge_scatter.norm_sq << ","
+			<< edge_scatter.gradient_dot_descent << "," << edge_norm_relative << "," << edge_dot_relative << "\n";
+		csv << "gpu-gather-fusion," << (gather.finite ? 1 : 0) << ","
+			<< gather_relative_l2 << "," << gather_max_abs << "," << gather.norm_sq << ","
+			<< gather.gradient_dot_descent << "," << gather_norm_relative << "," << gather_dot_relative << "\n";
+	}
+
+	const std::string json_path = output_dir + "\\gradient_verification.json";
+	std::ofstream json(json_path.c_str(), std::ios::out | std::ios::trunc);
+	if (json)
+	{
+		json << "{\n"
+			<< "  \"model\": \"spring-attachment-inertia; deterministic probe; collision excluded\",\n"
+			<< "  \"csr_valid\": true,\n"
+			<< "  \"threshold_relative_l2\": 0.0001,\n"
+			<< "  \"pass\": " << (pass ? "true" : "false") << ",\n"
+			<< "  \"edge_scatter_relative_l2\": " << edge_relative_l2 << ",\n"
+			<< "  \"gather_relative_l2\": " << gather_relative_l2 << ",\n"
+			<< "  \"edge_scatter_norm_relative_error\": " << edge_norm_relative << ",\n"
+			<< "  \"gather_norm_relative_error\": " << gather_norm_relative << ",\n"
+			<< "  \"edge_scatter_gdotd_relative_error\": " << edge_dot_relative << ",\n"
+			<< "  \"gather_gdotd_relative_error\": " << gather_dot_relative << "\n"
+			<< "}\n";
+	}
+
+	std::cout << "Compute-shader gradient verification " << (pass ? "passed" : "failed")
+		<< ": " << csv_path << std::endl;
+	return pass;
+}
 void Simulation::collisionPostProcessCS(VectorX& x, VectorX& v)
 {
 	if (!m_processing_collision || !m_scene || m_scene->IsEmpty())
@@ -1816,6 +2110,7 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 
 	static bool initialized = false;
 	static std::ofstream profile_file;
+	static std::ofstream extended_profile_file;
 	static std::ofstream experiment_profile_file;
 static std::ofstream quality_profile_file;
 	if (!initialized)
@@ -1828,6 +2123,14 @@ static std::ofstream quality_profile_file;
 		{
 			profile_file << "frame,fps_avg,fps_inst,use_cs_ncg,converged,exploded,iterations,total_ms,front_ms,transfer_ms,cs_y_upload_ms,cs_y_to_x_copy_ms,cs_x_readback_ms,cs_x_readback_wait_ms,cs_x_readback_copy_ms,iteration_ms,optimization_ms,back_ms,update_posvel_ms,position_stats_ms,collision_ms,step_size,objective_energy,gradient_norm,max_displacement,max_position,cs_linesearch_ms,cs_gradstats_ms,cs_gradient_gpu_ms,cs_reduction_gpu_ms,cs_stats_readback_ms,cs_xupdate_ms,cs_xupdate_gpu_ms,cs_descent_ms,cs_descent_gpu_ms,cs_full_ls,cs_skip_ls,cs_unit_accepts\n";
 			profile_file.flush();
+		}
+		const std::string extended_profile_path = GenPDResolveOutputPath("frame_profile_extended.csv");
+		GenPDEnsureDirectoryForFile(extended_profile_path);
+		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
+		if (extended_profile_file.is_open())
+		{
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts\n";
+			extended_profile_file.flush();
 		}
 		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
 		GenPDEnsureDirectoryForFile(experiment_profile_path);
@@ -1895,6 +2198,24 @@ initialized = true;
 		<< g_cs_profile_skipped_linesearch_calls << ","
 		<< g_cs_profile_unit_step_accepts << "\n";
 	profile_file.flush();
+
+	if (extended_profile_file.is_open())
+	{
+		const bool frame_valid = !m_last_profile_exploded && m_last_profile_termination_reason == "none";
+		extended_profile_file << frame << ","
+			<< (frame_valid ? 1 : 0) << ","
+			<< m_last_profile_termination_reason << ","
+			<< (m_last_profile_converged ? 1 : 0) << ","
+			<< (m_last_profile_exploded ? 1 : 0) << ","
+			<< m_last_profile_iterations << ","
+			<< m_last_profile_gradient_norm << ","
+			<< m_last_profile_max_position << ","
+			<< m_last_profile_objective_energy << ","
+			<< g_cs_profile_full_linesearch_calls << ","
+			<< g_cs_profile_skipped_linesearch_calls << ","
+			<< g_cs_profile_unit_step_accepts << "\n";
+		extended_profile_file.flush();
+	}
 
 	if (experiment_profile_file.is_open())
 	{
@@ -3438,6 +3759,7 @@ void Simulation::integrateImplicitMethod()
 		syncCS2GpuStateToCPU();
 	}
 	m_cs_render_position_valid = false;
+	m_last_profile_termination_reason = "none";
 	// take a initial guess
 	VectorX x = m_y;
 	//VectorX x = m_mesh->m_current_positions;
@@ -3772,7 +4094,9 @@ void Simulation::integrateImplicitMethod()
 	}
 
 	m_last_profile_exploded = false;
-	if (!x_is_finite || !std::isfinite(m_cs_gradient_norm_sq) || !std::isfinite(m_cs_gradient_dot_descent) || max_position > 1e3f)
+	const bool cs_stats_finite = !use_cs_ncg
+		|| (std::isfinite(m_cs_gradient_norm_sq) && std::isfinite(m_cs_gradient_dot_descent));
+	if (!x_is_finite || !cs_stats_finite || max_position > 1e3f)
 	{
 		if (use_cs_gpu_state)
 		{
@@ -3780,12 +4104,15 @@ void Simulation::integrateImplicitMethod()
 			use_cs_gpu_state = false;
 		}
 		m_last_profile_exploded = true;
+		m_last_profile_termination_reason = (!x_is_finite || !cs_stats_finite)
+			? "nonfinite"
+			: "max_position";
 		g_cs_unit_step_shortcut_budget = 0;
 		g_cs_prefetched_energy_valid = false;
 		x = m_mesh->m_current_positions;
 		max_displacement = 0.0;
 		max_position = VectorInfinityNorm(x);
-		converge = true;
+		converge = false;
 	}
 
 
@@ -3956,7 +4283,14 @@ bool Simulation::performNCG_CS2(VectorX& x, ScalarType& beta, VectorX& gradient_
 
 	TimerWrapper t_linesearch;
 	t_linesearch.Tic();
-	lineSearch_CS(x, gradient_dir, descent_dir);
+	if (GenPDExperimentUsesBatchedLineSearch())
+	{
+		lineSearch_CS(x, gradient_dir, descent_dir);
+	}
+	else
+	{
+		lineSearchCSSerial(x, gradient_dir, descent_dir);
+	}
 	t_linesearch.Toc();
 	t_linesearch.Report("linesearch", m_verbose_show_optimization_time);
 	g_cs_profile_linesearch_ms += t_linesearch.DurationInSeconds() * 1000.0;
@@ -5660,9 +5994,9 @@ ScalarType Simulation::lineSearchCSSerial(const VectorX& x, const VectorX& gradi
 	(void)gradient_dir;
 	(void)descent_dir;
 
-	if (!GenPDExperimentUsesBatchedLineSearch())
+	if (GenPDExperimentUsesBatchedLineSearch())
 	{
-		return lineSearchCSSerial(x, gradient_dir, descent_dir);
+		return lineSearch_CS(x, gradient_dir, descent_dir);
 	}
 
 	if (!m_enable_line_search)
@@ -5768,15 +6102,9 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	}*/
 
 	const bool gpu_resident_line_search = g_cs_gpu_state_active_frame;
-	if (!gpu_resident_line_search && g_cs_unit_step_shortcut_budget > 0u)
-	{
-		--g_cs_unit_step_shortcut_budget;
-		++g_cs_profile_skipped_linesearch_calls;
-		g_cs_prefetched_energy_valid = false;
-		m_ls_step_size = 1.0f;
-		UploadCSLineSearchResult(ResultID, m_ls_step_size, 0, 1, m_ls_prefetched_energy);
-		return m_ls_step_size;
-	}
+	// The CPU-controlled path evaluates Armijo every iteration. Reusing a prior
+	// unit step changes the accepted NCG trajectory and can lose descent.
+	g_cs_unit_step_shortcut_budget = 0;
 
 	uploadCSResourcesIfNeeded();
 
@@ -5948,13 +6276,9 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	const ScalarType armijo_rhs = current_objective_value + m_ls_alpha * m_cs_gradient_dot_descent;
 	if (candidate_energy <= armijo_rhs)
 	{
-		const unsigned int accepted_shortcut_budget =
-			(m_mesh && m_mesh->m_vertices_number >= kCSLargeClothVertexThreshold)
-			? kCSLargeClothUnitStepShortcutBudget
-			: kCSUnitStepShortcutBudget;
 		m_ls_prefetched_energy = candidate_energy;
 		g_cs_prefetched_energy_valid = true;
-		g_cs_unit_step_shortcut_budget = accepted_shortcut_budget;
+		g_cs_unit_step_shortcut_budget = 0;
 		++g_cs_profile_unit_step_accepts;
 		m_ls_step_size = 1.0f;
 		UploadCSLineSearchResult(ResultID, m_ls_step_size, 0, 1, m_ls_prefetched_energy);

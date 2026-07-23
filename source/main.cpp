@@ -135,6 +135,7 @@ ScalarType g_cli_timestep = static_cast<ScalarType>(-1);
 ScalarType g_cli_stretch_stiffness = static_cast<ScalarType>(-1);
 ScalarType g_cli_bending_stiffness = static_cast<ScalarType>(-1);
 int g_cli_cloth_dimension = 0;
+std::string g_cli_verify_cs_gradient_dir;
 std::string g_cli_scene;
 int g_cli_capture_frame = -1;
 std::string g_cli_capture_output;
@@ -337,6 +338,12 @@ glutReshapeWindow(g_screen_width, g_screen_height);
 		reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
 		reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
 		reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+	if (!g_cli_verify_cs_gradient_dir.empty())
+	{
+		const std::string verification_dir = GenPDResolveOutputPath(g_cli_verify_cs_gradient_dir);
+		const bool verified = g_simulation->VerifyCSGradient(verification_dir);
+		return verified ? EXIT_SUCCESS : EXIT_FAILURE;
+	}
 	if (g_benchmark_mode)
 	{
 		g_pause = false;
@@ -960,6 +967,10 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_cloth_dimension = parse_positive_int(argv[++i], g_cli_cloth_dimension);
         }
+        else if (arg == "--verify-cs-gradient" && i + 1 < argc)
+        {
+            g_cli_verify_cs_gradient_dir = argv[++i];
+        }
         else if (arg == "--scene" && i + 1 < argc)
         {
             g_cli_scene = argv[++i];
@@ -1025,6 +1036,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --stretch-stiffness FLOAT   Override cloth stretch stiffness for this run.\n"
                 << "  --bending-stiffness FLOAT   Override cloth bending stiffness for this run.\n"
                 << "  --cloth-dimension N         Override square cloth resolution for this run.\n"
+                << "  --verify-cs-gradient PATH  Export CPU/edge/gather gradient diagnostics and exit.\n"
                 << "  --scene PATH                Load a scene XML file relative to project root.\n"
                 << "  --capture-frame N           Capture rendered benchmark frame N.\n"
                 << "  --capture-output PATH       PNG output path for --capture-frame.\n"
