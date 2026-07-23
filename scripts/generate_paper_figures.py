@@ -98,6 +98,10 @@ def validate_inputs(run_root):
     ensure(manifest['performance']['repetitions'] == 3, 'Formal figures require three repetitions.')
     ensure(abs(float(manifest['quality_target']['position_rel_l2_p95']) - 1e-3) < 1e-15,
            'Unexpected equal-quality threshold.')
+    ensure(manifest.get('measurement', {}).get('mode') == 'rendered-end-to-end',
+           'Formal figures require rendered end-to-end measurements.')
+    ensure(manifest['measurement'].get('primary_metric') == 'frame_wall_ms',
+           'Formal figures require frame_wall_ms as the primary metric.')
 
     summary = load_csv(summary_path)
     calibration = load_csv(calibration_path)
@@ -132,7 +136,8 @@ def validate_inputs(run_root):
 
     for row in summary:
         ensure(as_int(row['repetitions'], 'repetitions', row) == 3, 'Incomplete repetition count: {0}'.format(canonical_key(row)))
-        for field in ['total_ms_mean', 'total_ms_std', 'total_ms_p50', 'total_ms_p95',
+        for field in ['frame_wall_ms_mean', 'frame_wall_ms_std', 'frame_wall_ms_p50', 'frame_wall_ms_p95',
+                      'render_and_present_wall_ms_mean', 'total_ms_mean', 'total_ms_std', 'total_ms_p50', 'total_ms_p95',
                       'optimization_ms_mean', 'transfer_ms_mean', 'p95_position_rel_l2',
                       'calibration_failure_rate']:
             as_float(row[field], field, row)
@@ -177,11 +182,11 @@ def plot_ablation(summary, output_dir, paper_dir):
     for col, scene in enumerate(['hanging', 'moving-sphere']):
         ax = axes[0][col]
         rows = [indexed[(scene, 386, variant)] for variant in VARIANTS]
-        means = [as_float(row['total_ms_mean'], 'total_ms_mean', row) for row in rows]
-        errors = [as_float(row['total_ms_std'], 'total_ms_std', row) for row in rows]
+        means = [as_float(row['frame_wall_ms_mean'], 'frame_wall_ms_mean', row) for row in rows]
+        errors = [as_float(row['frame_wall_ms_std'], 'frame_wall_ms_std', row) for row in rows]
         ax.bar(x, means, yerr=errors, capsize=2, color=COLORS, edgecolor='black', linewidth=0.35)
         ax.set_title('{0}: 148,996 vertices'.format('Hanging cloth' if scene == 'hanging' else 'Moving sphere'))
-        ax.set_ylabel('Frame time (ms)')
+        ax.set_ylabel('Rendered frame time (ms)')
         ax.set_xticks(x)
         ax.set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
         ax.grid(axis='y', alpha=0.25)
@@ -226,12 +231,12 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.75))
     for scene, marker, title in [('hanging', 'o', 'Hanging cloth'), ('moving-sphere', 's', 'Moving sphere')]:
         for variant, style, label in [('cpu-ncg', '--', 'CPU NCG'), ('gpu-gather-fusion-batched-ls-persistent', '-', 'Final GPU')]:
-            values = [as_float(indexed[(scene, dimension, variant)]['total_ms_mean'], 'total_ms_mean', variant)
+            values = [as_float(indexed[(scene, dimension, variant)]['frame_wall_ms_mean'], 'frame_wall_ms_mean', variant)
                       for dimension in dimensions]
             axes[0][0].plot(dimensions, values, linestyle=style, marker=marker,
                             label='{0}, {1}'.format(title, label))
     axes[0][0].set_xlabel('Cloth resolution')
-    axes[0][0].set_ylabel('Equal-quality frame time (ms)')
+    axes[0][0].set_ylabel('Equal-quality rendered frame time (ms)')
     axes[0][0].set_yscale('log')
     axes[0][0].set_xticks(dimensions)
     axes[0][0].legend(frameon=False, ncol=2)
@@ -240,8 +245,8 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     for scene, marker, title in [('hanging', 'o', 'Hanging cloth'), ('moving-sphere', 's', 'Moving sphere')]:
         ratios = []
         for dimension in dimensions:
-            cpu = as_float(indexed[(scene, dimension, 'cpu-ncg')]['total_ms_mean'], 'total_ms_mean', scene)
-            gpu = as_float(indexed[(scene, dimension, 'gpu-gather-fusion-batched-ls-persistent')]['total_ms_mean'], 'total_ms_mean', scene)
+            cpu = as_float(indexed[(scene, dimension, 'cpu-ncg')]['frame_wall_ms_mean'], 'frame_wall_ms_mean', scene)
+            gpu = as_float(indexed[(scene, dimension, 'gpu-gather-fusion-batched-ls-persistent')]['frame_wall_ms_mean'], 'frame_wall_ms_mean', scene)
             ratios.append(cpu / gpu)
         axes[0][1].plot(dimensions, ratios, marker=marker, label=title)
     axes[0][1].axhline(1.0, color='#777777', linewidth=0.8)

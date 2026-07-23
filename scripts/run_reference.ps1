@@ -8,7 +8,11 @@ param(
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
-    [bool]$NoRender = $true,
+    [switch]$SyncGpu,
+    [switch]$DisableVsync,
+    [int]$RenderWidth = 0,
+    [int]$RenderHeight = 0,
+    [bool]$NoRender = $false,
     [bool]$Uncapped = $true,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -38,6 +42,7 @@ $benchmarkScript = Join-Path $ScriptDir 'run_benchmark.ps1'
     -SolverVariant cpu-ncg -IterationsPerFrame $ReferenceIterations `
     -ReferenceExportDir $checkpointDir -QualityCheckpointStride $CheckpointStride `
     -OutputDir $OutputDir -ExePath $ExePath -ProfileGpuQueries:$ProfileGpuQueries `
+    -SyncGpu:$SyncGpu -DisableVsync:$DisableVsync -RenderWidth $RenderWidth -RenderHeight $RenderHeight `
     -NoRender:$NoRender -Uncapped:$Uncapped -ExtraArgs $ExtraArgs
 if (-not $?) {
     throw 'Reference benchmark failed.'

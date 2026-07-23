@@ -19,6 +19,11 @@ if (-not (Test-Path -LiteralPath $selectedPath)) { throw "Missing selected equal
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ([int]$manifest.performance.repetitions -ne 3) { throw 'Formal performance protocol requires exactly three repetitions.' }
 if ([double]$manifest.quality_target.position_rel_l2_p95 -ne 0.001) { throw 'Unexpected equal-quality threshold in manifest.' }
+if ($manifest.measurement.mode -ne 'rendered-end-to-end' -or $manifest.measurement.primary_metric -ne 'frame_wall_ms') {
+    throw 'Formal summary requires the rendered end-to-end measurement protocol.'
+}
+$renderWidth = [int]$manifest.measurement.render_width
+$renderHeight = [int]$manifest.measurement.render_height
 
 function To-Double {
     param($Value)
@@ -63,18 +68,23 @@ function Get-RequiredRows {
     param([string]$OutputDir, [int]$ExpectedFrames, [int]$Warmup)
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
     $experimentPath = Join-Path $OutputDir 'frame_profile_experiment.csv'
+    $presentationPath = Join-Path $OutputDir 'frame_presentation.csv'
     $metadataPath = Join-Path $OutputDir 'run_metadata.json'
-    foreach ($path in @($profilePath, $experimentPath, $metadataPath)) {
+    foreach ($path in @($profilePath, $experimentPath, $presentationPath, $metadataPath)) {
         if (-not (Test-Path -LiteralPath $path)) { throw "Required output is missing: $path" }
     }
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     foreach ($field in @('git_commit', 'gpu_name', 'nvidia_driver_version')) {
         if ([string]::IsNullOrWhiteSpace([string]$metadata.$field)) { throw "Required metadata field '$field' is missing: $metadataPath" }
     }
+    if ([bool]$metadata.benchmark.no_render -or -not [bool]$metadata.benchmark.sync_gpu -or -not [bool]$metadata.benchmark.disable_vsync) {
+        throw "Formal performance run did not use rendered, synchronized, vsync-disabled timing: $metadataPath"
+    }
     $profileRows = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $Warmup })
     $experimentRows = @(Import-Csv -LiteralPath $experimentPath | Where-Object { [int]$_.frame -ge $Warmup })
-    if ($profileRows.Count -ne $ExpectedFrames -or $experimentRows.Count -ne $ExpectedFrames) {
-        throw "Unexpected measured-frame count in $OutputDir (profile=$($profileRows.Count), experiment=$($experimentRows.Count), expected=$ExpectedFrames)."
+    $presentationRows = @(Import-Csv -LiteralPath $presentationPath | Where-Object { [int]$_.frame -ge $Warmup })
+    if ($profileRows.Count -ne $ExpectedFrames -or $experimentRows.Count -ne $ExpectedFrames -or $presentationRows.Count -ne $ExpectedFrames) {
+        throw "Unexpected measured-frame count in $OutputDir (profile=$($profileRows.Count), experiment=$($experimentRows.Count), presentation=$($presentationRows.Count), expected=$ExpectedFrames)."
     }
     foreach ($row in $profileRows) {
         if ($row.exploded -eq '1') { throw "Exploded frame in formal performance run: $OutputDir" }
@@ -82,7 +92,15 @@ function Get-RequiredRows {
             if ($null -eq (To-Double $row.$field)) { throw "Non-finite '$field' in formal performance run: $OutputDir" }
         }
     }
-    return [pscustomobject]@{ profile = $profileRows; experiment = $experimentRows; metadata = $metadata }
+    foreach ($row in $presentationRows) {
+        if ($row.rendered -ne '1' -or $row.gpu_sync_enabled -ne '1' -or [int]$row.screen_width -ne $renderWidth -or [int]$row.screen_height -ne $renderHeight) {
+            throw "Invalid presentation profile row in $OutputDir"
+        }
+        foreach ($field in @('frame_wall_ms', 'render_and_present_wall_ms')) {
+            if ($null -eq (To-Double $row.$field)) { throw "Non-finite '$field' in presentation profile: $OutputDir" }
+        }
+    }
+    return [pscustomobject]@{ profile = $profileRows; experiment = $experimentRows; presentation = $presentationRows; metadata = $metadata }
 }
 
 $selected = @(Import-Csv -LiteralPath $selectedPath)
@@ -98,6 +116,7 @@ foreach ($case in $selected) {
         $run = Get-RequiredRows -OutputDir $outputDir -ExpectedFrames ([int]$manifest.performance.frames) -Warmup ([int]$manifest.performance.warmup_frames)
         $profile = $run.profile
         $experiment = $run.experiment
+        $presentation = $run.presentation
         $summary = [pscustomobject]@{
             scene_id = $case.scene_id
             scene_path = $case.scene_path
@@ -110,6 +129,8 @@ foreach ($case in $selected) {
             gpu_name = $run.metadata.gpu_name
             nvidia_driver_version = $run.metadata.nvidia_driver_version
             measured_frames = $profile.Count
+            frame_wall_ms_mean = Get-Mean (Get-FieldValues $presentation 'frame_wall_ms')
+            render_and_present_wall_ms_mean = Get-Mean (Get-FieldValues $presentation 'render_and_present_wall_ms')
             total_ms_mean = Get-Mean (Get-FieldValues $profile 'total_ms')
             optimization_ms_mean = Get-Mean (Get-FieldValues $profile 'optimization_ms')
             transfer_ms_mean = Get-Mean (Get-FieldValues $profile 'transfer_ms')
@@ -127,7 +148,7 @@ foreach ($case in $selected) {
             persistent_buffers_active = (Get-FieldValues $experiment 'persistent_buffers_active' | Select-Object -First 1)
         }
         $frameSummaryRows += $summary
-        $groupRows[$caseKey] += [pscustomobject]@{ run = $summary; profile = $profile; case = $case }
+        $groupRows[$caseKey] += [pscustomobject]@{ run = $summary; profile = $profile; presentation = $presentation; case = $case }
     }
 }
 
@@ -138,7 +159,9 @@ foreach ($key in $groupRows.Keys) {
     $first = $runs[0].run
     $caseInfo = $runs[0].case
     $allFrames = @($runs | ForEach-Object { $_.profile })
+    $allPresentationFrames = @($runs | ForEach-Object { $_.presentation })
     $totalMeans = @($runs | ForEach-Object { [double]$_.run.total_ms_mean })
+    $frameWallMeans = @($runs | ForEach-Object { [double]$_.run.frame_wall_ms_mean })
     $dispatchMeans = @($runs | ForEach-Object { [double]$_.run.gradient_dispatches_mean + [double]$_.run.stats_dispatches_mean + [double]$_.run.reduction_dispatches_mean + [double]$_.run.xupdate_dispatches_mean + [double]$_.run.descent_dispatches_mean })
     $paperRows += [pscustomobject]@{
         scene_id = $first.scene_id
@@ -150,6 +173,11 @@ foreach ($key in $groupRows.Keys) {
         git_commit = $first.git_commit
         gpu_name = $first.gpu_name
         nvidia_driver_version = $first.nvidia_driver_version
+        frame_wall_ms_mean = Get-Mean $frameWallMeans
+        frame_wall_ms_std = Get-SampleStd $frameWallMeans
+        frame_wall_ms_p50 = Get-Percentile -Values (Get-FieldValues $allPresentationFrames 'frame_wall_ms') -Percentile 0.50
+        frame_wall_ms_p95 = Get-Percentile -Values (Get-FieldValues $allPresentationFrames 'frame_wall_ms') -Percentile 0.95
+        render_and_present_wall_ms_mean = Get-Mean @($runs | ForEach-Object { [double]$_.run.render_and_present_wall_ms_mean })
         total_ms_mean = Get-Mean $totalMeans
         total_ms_std = Get-SampleStd $totalMeans
         total_ms_p50 = Get-Percentile -Values (Get-FieldValues $allFrames 'total_ms') -Percentile 0.50

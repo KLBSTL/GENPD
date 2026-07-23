@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectRoot = '',
-    [string]$RunLabel = 'paper-20260723',
+    [string]$RunLabel = 'paper-20260723-rendered',
     [string]$RunRoot = '',
     [ValidateSet('manifest', 'reference', 'calibrate', 'performance', 'stability', 'capture', 'all')]
     [string]$Stage = 'all',
@@ -50,6 +50,8 @@ $performanceFrames = 300
 $performanceWarmup = 30
 $performanceRepetitions = 3
 $captureFrame = 180
+$renderWidth = 1600
+$renderHeight = 900
 
 function Convert-ToInvariantDouble {
     param($Value)
@@ -118,6 +120,15 @@ function Write-Manifest {
             repetitions = $performanceRepetitions
             quality_metrics_during_timing = $false
         }
+        measurement = [ordered]@{
+            mode = 'rendered-end-to-end'
+            primary_metric = 'frame_wall_ms'
+            render_width = $renderWidth
+            render_height = $renderHeight
+            gpu_sync = $true
+            disable_vsync = $true
+            screenshot_readback_during_timing = $false
+        }
         stability = [ordered]@{
             solver_variant = 'gpu-gather-fusion-batched-ls-persistent'
             cloth_dimension = 256
@@ -150,7 +161,7 @@ function Get-CaseExtraArgs {
 }
 
 function Test-RunComplete {
-    param([string]$OutputDir, [int]$Frames, [int]$Warmup, [switch]$RequireQuality)
+    param([string]$OutputDir, [int]$Frames, [int]$Warmup, [switch]$RequireQuality, [switch]$RequirePresentation)
     $profilePath = Join-Path $OutputDir 'frame_profile.csv'
     $metadataPath = Join-Path $OutputDir 'run_metadata.json'
     if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $metadataPath)) { return $false }
@@ -167,6 +178,25 @@ function Test-RunComplete {
         $qualityPath = Join-Path $OutputDir 'quality_metrics.csv'
         if (-not (Test-Path -LiteralPath $qualityPath)) { return $false }
     }
+    if ($RequirePresentation) {
+        $presentationPath = Join-Path $OutputDir 'frame_presentation.csv'
+        if (-not (Test-Path -LiteralPath $presentationPath)) { return $false }
+        $presentationRows = @(Import-Csv -LiteralPath $presentationPath | Where-Object { [int]$_.frame -ge $Warmup })
+        if ($presentationRows.Count -ne $Frames) { return $false }
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        if ([bool]$metadata.benchmark.no_render -or -not [bool]$metadata.benchmark.sync_gpu -or -not [bool]$metadata.benchmark.disable_vsync) {
+            return $false
+        }
+        foreach ($row in $presentationRows) {
+            if ($row.rendered -ne '1' -or $row.gpu_sync_enabled -ne '1' -or [int]$row.screen_width -ne $renderWidth -or [int]$row.screen_height -ne $renderHeight) {
+                return $false
+            }
+            foreach ($field in @('frame_wall_ms', 'render_and_present_wall_ms')) {
+                $number = Convert-ToInvariantDouble $row.$field
+                if ($null -eq $number -or [double]::IsNaN($number) -or [double]::IsInfinity($number) -or $number -le 0.0) { return $false }
+            }
+        }
+    }
     return $true
 }
 
@@ -174,14 +204,14 @@ function Invoke-Reference {
     param([hashtable]$Scene, [int]$ClothDimension)
     $caseId = '{0}-d{1}' -f $Scene.id, $ClothDimension
     $outputDir = Join-Path $RunRoot (Join-Path 'references' $caseId)
-    if (-not $Force -and (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality)) { return $outputDir }
+    if (-not $Force -and (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality -RequirePresentation)) { return $outputDir }
     if ($DryRun) { Write-Host "[dry-run] reference $caseId"; return $outputDir }
     New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
     & $referenceScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-reference-$caseId") `
         -Frames $qualityFrames -Warmup $qualityWarmup -ReferenceIterations 100 -CheckpointStride $qualityCheckpointStride `
-        -OutputDir $outputDir -NoRender:$true -Uncapped:$true `
+        -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight `
         -ExtraArgs (Get-CaseExtraArgs -ClothDimension $ClothDimension -ScenePath $Scene.path)
-    if (-not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality)) {
+    if (-not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality -RequirePresentation)) {
         throw "Reference run is incomplete or invalid: $outputDir"
     }
     return $outputDir
@@ -236,12 +266,12 @@ function Invoke-Calibration {
                         Write-Host "[dry-run] calibration $caseId"
                         continue
                     }
-                    if ($Force -or -not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality)) {
+                    if ($Force -or -not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality -RequirePresentation)) {
                         New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
                         & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-calibration-$caseId") `
                             -Frames $qualityFrames -Warmup $qualityWarmup -SolverVariant $variant -IterationsPerFrame $budget `
                             -QualityReferenceDir $checkpointDir -QualityCheckpointStride $qualityCheckpointStride `
-                            -OutputDir $outputDir -NoRender:$true -Uncapped:$true `
+                            -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight `
                             -ExtraArgs (Get-CaseExtraArgs -ClothDimension $dimension -ScenePath $scene.path)
                     }
                     $metrics = Get-QualitySummary -OutputDir $outputDir
@@ -291,14 +321,14 @@ function Invoke-Performance {
             $caseId = '{0}-d{1}-{2}-rep{3:D2}' -f $row.scene_id, $row.cloth_dimension, $row.solver_variant, $rep
             $outputDir = Join-Path $RunRoot (Join-Path 'performance' $caseId)
             if ($DryRun) { Write-Host "[dry-run] performance $caseId"; continue }
-            if (-not $Force -and (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup)) { continue }
+            if (-not $Force -and (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup -RequirePresentation)) { continue }
             New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
             & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-performance-$caseId") `
                 -Frames $performanceFrames -Warmup $performanceWarmup -SolverVariant $row.solver_variant `
                 -IterationsPerFrame ([int]$row.iterations_per_frame) -OutputDir $outputDir `
-                -NoRender:$true -Uncapped:$true -ProfileGpuQueries:$ProfileGpuQueries `
+                -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -ProfileGpuQueries:$ProfileGpuQueries `
                 -ExtraArgs (Get-CaseExtraArgs -ClothDimension ([int]$row.cloth_dimension) -ScenePath $row.scene_path)
-            if (-not (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup)) {
+            if (-not (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup -RequirePresentation)) {
                 throw "Performance run is incomplete or invalid: $outputDir"
             }
         }
@@ -314,11 +344,11 @@ function Invoke-Stability {
                 $caseId = 'dt{0}-stretch{1}-rep{2:D2}' -f $dtLabel, $stretch, $rep
                 $outputDir = Join-Path $RunRoot (Join-Path 'stability' $caseId)
                 if ($DryRun) { Write-Host "[dry-run] stability $caseId"; continue }
-                if ($Force -or -not (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup -RequireQuality)) {
+                if ($Force -or -not (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup -RequireQuality -RequirePresentation)) {
                     New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
                     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-stability-$caseId") `
                         -Frames $performanceFrames -Warmup $performanceWarmup -SolverVariant 'gpu-gather-fusion-batched-ls-persistent' `
-                        -OutputDir $outputDir -NoRender:$true -Uncapped:$true -QualityMetrics `
+                        -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -QualityMetrics `
                         -ExtraArgs (Get-CaseExtraArgs -ClothDimension 256 -ScenePath 'scenes\moving_sphere_cloth.xml' -Timestep $dt -Stretch $stretch -Bending 20.0)
                 }
                 $profileRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })

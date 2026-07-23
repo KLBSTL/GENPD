@@ -14,12 +14,15 @@ param(
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
     [switch]$SyncGpu,
+    [switch]$DisableVsync,
     [int]$CaptureFrame = -1,
     [string]$CaptureOutput = '',
     [int]$CaptureWidth = 0,
     [int]$CaptureHeight = 0,
+    [int]$RenderWidth = 0,
+    [int]$RenderHeight = 0,
     [switch]$Headless,
-    [bool]$NoRender = $true,
+    [bool]$NoRender = $false,
     [bool]$Uncapped = $true,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -92,6 +95,9 @@ if ($CaptureFrame -lt -1) { throw 'CaptureFrame must be nonnegative or -1.' }
 if (($CaptureWidth -lt 0) -or ($CaptureHeight -lt 0) -or (($CaptureWidth -eq 0) -ne ($CaptureHeight -eq 0))) {
     throw 'CaptureWidth and CaptureHeight must both be positive when specified.'
 }
+if (($RenderWidth -lt 0) -or ($RenderHeight -lt 0) -or (($RenderWidth -eq 0) -ne ($RenderHeight -eq 0))) {
+    throw 'RenderWidth and RenderHeight must both be positive when specified.'
+}
 if ($CaptureFrame -ge 0 -and $CaptureOutput -eq '') {
     $CaptureOutput = Join-Path $OutputDir ('capture_frame_{0:D6}.png' -f $CaptureFrame)
 }
@@ -117,6 +123,7 @@ if ($NoRender) { $appArgs += '--no-render' }
 if ($Headless) { $appArgs += '--headless' }
 if ($Uncapped) { $appArgs += '--uncapped' }
 if ($SyncGpu) { $appArgs += '--sync-gpu' }
+if ($DisableVsync) { $appArgs += '--disable-vsync' }
 if ($ProfileGpuQueries) { $appArgs += '--profile-gpu-queries' }
 if ($IterationsPerFrame -gt 0) { $appArgs += @('--iterations-per-frame', $IterationsPerFrame) }
 if ($ReferenceExportDir -ne '') { $appArgs += @('--reference-export-dir', [System.IO.Path]::GetFullPath($ReferenceExportDir)) }
@@ -127,6 +134,7 @@ if ($QualityCheckpointStride -gt 0 -and ($ReferenceExportDir -ne '' -or $Quality
 }
 if ($CaptureFrame -ge 0) { $appArgs += @('--capture-frame', $CaptureFrame, '--capture-output', [System.IO.Path]::GetFullPath($CaptureOutput)) }
 if ($CaptureWidth -gt 0) { $appArgs += @('--capture-resolution', $CaptureWidth, $CaptureHeight) }
+if ($RenderWidth -gt 0) { $appArgs += @('--render-resolution', $RenderWidth, $RenderHeight) }
 if ($ExtraArgs) { $appArgs += $ExtraArgs }
 
 $logPath = Join-Path $OutputDir 'benchmark_stdout.log'
@@ -146,6 +154,7 @@ if ($exitCode -ne 0) {
 
 Write-Host "Profile CSV: $(Join-Path $OutputDir 'frame_profile.csv')"
 Write-Host "Experiment profile CSV: $(Join-Path $OutputDir 'frame_profile_experiment.csv')"
+Write-Host "Presentation profile CSV: $(Join-Path $OutputDir 'frame_presentation.csv')"
 Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"
 if ($QualityMetrics -or $ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
     Write-Host "Quality metrics: $(Join-Path $OutputDir 'quality_metrics.csv')"

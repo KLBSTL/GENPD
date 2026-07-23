@@ -37,6 +37,7 @@
 //----------Headers--------------//
 #include "global_headers.h"
 #include <cstdlib>
+#include <fstream>
 #include "math_headers.h"
 #include "openGL_headers.h"
 //----------Framework--------------//
@@ -70,6 +71,10 @@ SelectionTool* g_selection_tool;
 MatlabDebugger * g_debugger;
 #endif // ENABLE_MATLAB_DEBUGGING
 TimerWrapper g_global_timer;
+TimerWrapper g_benchmark_frame_timer;
+TimerWrapper g_benchmark_render_timer;
+bool g_benchmark_frame_timer_active = false;
+unsigned int g_benchmark_profile_frame = 0;
 int g_interval = 100;
 ScalarType total_time = 0;
 
@@ -135,6 +140,8 @@ int g_cli_capture_frame = -1;
 std::string g_cli_capture_output;
 int g_cli_capture_width = 0;
 int g_cli_capture_height = 0;
+int g_cli_render_width = 0;
+int g_cli_render_height = 0;
 bool g_cli_capture_pending = false;
 bool g_cli_restore_iterations_per_frame = false;
 unsigned int g_cli_original_iterations_per_frame = 0;
@@ -156,6 +163,7 @@ int parse_nonnegative_int(const char*, const int);
 bool should_use_uncapped_benchmark(void);
 void schedule_next_timeout(void);
 void finish_display_frame(void);
+void log_benchmark_presentation_frame(void);
 void apply_benchmark_swap_interval(void);
 void maybe_finish_benchmark(void);
 void maybe_capture_benchmark_frame(void);
@@ -223,6 +231,11 @@ int main(int argc, char ** argv)
 {
 	//test();
 	parse_command_line(argc, argv);
+	if (g_cli_render_width > 0 && g_cli_render_height > 0)
+	{
+		g_screen_width = g_cli_render_width;
+		g_screen_height = g_cli_render_height;
+	}
 	if (g_cli_capture_width > 0 && g_cli_capture_height > 0)
 	{
 		g_screen_width = g_cli_capture_width;
@@ -298,6 +311,17 @@ _putenv_s("GENPD_STRETCH_STIFFNESS_OVERRIDE", stretch_metadata.c_str());
 _putenv_s("GENPD_BENDING_STIFFNESS_OVERRIDE", bending_metadata.c_str());
 _putenv_s("GENPD_CLOTH_DIMENSION_OVERRIDE", cloth_dimension_metadata.c_str());
 _putenv_s("GENPD_SCENE", selected_scene.c_str());
+// Configuration loading may reset the window size; CLI rendering dimensions win.
+if (g_cli_render_width > 0 && g_cli_render_height > 0)
+{
+    g_screen_width = g_cli_render_width;
+    g_screen_height = g_cli_render_height;
+}
+if (g_cli_capture_width > 0 && g_cli_capture_height > 0)
+{
+    g_screen_width = g_cli_capture_width;
+    g_screen_height = g_cli_capture_height;
+}
 glutReshapeWindow(g_screen_width, g_screen_height);
 	GenPDWriteRunMetadata(
 		argc,
@@ -373,6 +397,8 @@ void finish_display_frame(void)
 		glFinish();
 	}
 
+	log_benchmark_presentation_frame();
+
 	if (g_benchmark_finish_after_display)
 	{
 		std::cout << "Benchmark complete after " << g_current_frame
@@ -385,6 +411,44 @@ void finish_display_frame(void)
 	{
 		schedule_next_timeout();
 	}
+}
+
+void log_benchmark_presentation_frame(void)
+{
+	if (!g_benchmark_frame_timer_active)
+	{
+		return;
+	}
+
+	g_benchmark_frame_timer.Toc();
+	g_benchmark_render_timer.Toc();
+
+	static bool initialized = false;
+	static std::ofstream presentation_profile_file;
+	if (!initialized)
+	{
+		const std::string profile_path = GenPDResolveOutputPath("frame_presentation.csv");
+		GenPDEnsureDirectoryForFile(profile_path);
+		presentation_profile_file.open(profile_path.c_str(), std::ios::out | std::ios::trunc);
+		if (presentation_profile_file.is_open())
+		{
+			presentation_profile_file << "frame,rendered,frame_wall_ms,render_and_present_wall_ms,gpu_sync_enabled,screen_width,screen_height\n";
+			presentation_profile_file.flush();
+		}
+		initialized = true;
+	}
+
+	if (presentation_profile_file.is_open())
+	{
+		presentation_profile_file << g_benchmark_profile_frame << ",1,"
+			<< g_benchmark_frame_timer.DurationInSeconds() * 1000.0 << ","
+			<< g_benchmark_render_timer.DurationInSeconds() * 1000.0 << ","
+			<< (g_benchmark_sync_gpu ? 1 : 0) << ","
+			<< g_screen_width << "," << g_screen_height << "\n";
+		presentation_profile_file.flush();
+	}
+
+	g_benchmark_frame_timer_active = false;
 }
 
 void apply_benchmark_swap_interval(void)
@@ -485,6 +549,13 @@ void timeout(int value)
 			}
 		}
 
+		if (g_benchmark_mode && !g_benchmark_no_render)
+		{
+			g_benchmark_profile_frame = g_current_frame;
+			g_benchmark_frame_timer.Tic();
+			g_benchmark_frame_timer_active = true;
+		}
+
 		// update scene
 		g_scene->Update(g_simulation->Timestep(), g_current_frame);
 
@@ -529,6 +600,10 @@ void display() {
 		return;
 	}
 
+	if (g_benchmark_frame_timer_active)
+	{
+		g_benchmark_render_timer.Tic();
+	}
 
     //Always and only do this at the start of a frame, it wipes the slate clean
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -908,6 +983,16 @@ void parse_command_line(int argc, char** argv)
                 g_cli_capture_height = height;
             }
         }
+        else if (arg == "--render-resolution" && i + 2 < argc)
+        {
+            const int width = parse_positive_int(argv[++i], 0);
+            const int height = parse_positive_int(argv[++i], 0);
+            if (width > 0 && height > 0)
+            {
+                g_cli_render_width = width;
+                g_cli_render_height = height;
+            }
+        }
         else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
@@ -944,6 +1029,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --capture-frame N           Capture rendered benchmark frame N.\n"
                 << "  --capture-output PATH       PNG output path for --capture-frame.\n"
                 << "  --capture-resolution W H    Render capture at a fixed size.\n"
+                << "  --render-resolution W H     Render benchmarks at a fixed viewport.\n"
 				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent.\n"
