@@ -153,6 +153,7 @@ bool g_cli_capture_pending = false;
 bool g_cli_restore_iterations_per_frame = false;
 unsigned int g_cli_original_iterations_per_frame = 0;
 bool g_cli_profile_gpu_queries = false;
+bool g_cli_profile_line_search_decisions = false;
 bool g_cli_print_paths = false;
 
 //----------glut function handlers-----------//
@@ -323,6 +324,8 @@ else if (g_cli_ncg_restart_period > 0)
     std::cerr << "--ncg-restart-period requires --ncg-restart-mode periodic." << std::endl;
     exit(EXIT_FAILURE);
 }
+g_simulation->SetProfileLineSearchDecisions(g_cli_profile_line_search_decisions);
+_putenv_s("GENPD_PROFILE_LINE_SEARCH_DECISIONS", g_cli_profile_line_search_decisions ? "1" : "0");
 if (g_cli_iterations_per_frame > 0)
 {
     g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
@@ -1084,8 +1087,12 @@ void parse_command_line(int argc, char** argv)
         else if (arg == "--profile-gpu-queries")
 		{
 			g_cli_profile_gpu_queries = true;
-		}
-		else if (arg == "--print-paths")
+        }
+        else if (arg == "--profile-line-search-decisions")
+        {
+            g_cli_profile_line_search_decisions = true;
+        }
+        else if (arg == "--print-paths")
 		{
 			g_cli_print_paths = true;
 		}
@@ -1104,6 +1111,7 @@ void parse_command_line(int argc, char** argv)
 				<< "  --output-dir PATH           Write benchmark/profile outputs to this directory.\n"
 				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
                 << "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+                << "  --profile-line-search-decisions  Trace Armijo decisions; diagnostic only.\n"
                 << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
                 << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"

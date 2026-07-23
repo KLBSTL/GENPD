@@ -94,6 +94,11 @@ namespace
 	unsigned int g_cs_profile_full_linesearch_calls = 0;
 	unsigned int g_cs_profile_skipped_linesearch_calls = 0;
 	unsigned int g_cs_profile_unit_step_accepts = 0;
+	unsigned int g_cs_profile_armijo_rejections = 0;
+	unsigned int g_cs_profile_armijo_failures = 0;
+	unsigned int g_cs_profile_armijo_fallbacks = 0;
+	unsigned int g_cs_profile_accepted_candidate_sum = 0;
+	unsigned int g_cs_profile_accepted_candidate_count = 0;
 	unsigned int g_cs_profile_gradient_dispatches = 0;
 	unsigned int g_cs_profile_stats_dispatches = 0;
 	unsigned int g_cs_profile_reduction_dispatches = 0;
@@ -461,6 +466,38 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(result), &result, GL_DYNAMIC_DRAW);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, buffer);
 	}
+	void RecordCSLineSearchDecision(const CSLineSearchResultGPU& result, unsigned int fallback_candidate_count)
+	{
+		if (result.accepted != 0)
+		{
+			const unsigned int candidate_index = result.step >= 0.999f ? 0u : static_cast<unsigned int>(std::max(0, result.chosen_i) + 1);
+			++g_cs_profile_accepted_candidate_count;
+			g_cs_profile_accepted_candidate_sum += candidate_index;
+			g_cs_profile_armijo_rejections += candidate_index;
+			if (candidate_index > 0u)
+			{
+				++g_cs_profile_armijo_fallbacks;
+			}
+		}
+		else
+		{
+			++g_cs_profile_armijo_failures;
+			++g_cs_profile_armijo_fallbacks;
+			// The unit candidate and every fallback candidate were rejected.
+			++g_cs_profile_armijo_rejections;
+			g_cs_profile_armijo_rejections += fallback_candidate_count;
+		}
+	}
+
+	bool ReadCSLineSearchResult(GLuint buffer, CSLineSearchResultGPU& result)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(result), &result);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		++g_cs_profile_host_readbacks;
+		return std::isfinite(result.step) && std::isfinite(result.accepted_energy);
+	}
+
 	void ResetCSNCGProfileMetrics()
 	{
 		g_cs_profile_linesearch_ms = 0.0;
@@ -475,6 +512,11 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_full_linesearch_calls = 0;
 		g_cs_profile_skipped_linesearch_calls = 0;
 		g_cs_profile_unit_step_accepts = 0;
+			g_cs_profile_armijo_rejections = 0;
+			g_cs_profile_armijo_failures = 0;
+			g_cs_profile_armijo_fallbacks = 0;
+			g_cs_profile_accepted_candidate_sum = 0;
+			g_cs_profile_accepted_candidate_count = 0;
 		g_cs_profile_gradient_dispatches = 0;
 		g_cs_profile_stats_dispatches = 0;
 		g_cs_profile_reduction_dispatches = 0;
@@ -584,6 +626,7 @@ Simulation::Simulation()
 	m_verbose_show_factorization_warning = true;
 	m_profile_logging_enabled = true;
 m_quality_metrics_enabled = false;
+m_profile_line_search_decisions = false;
 m_quality_checkpoint_stride = 1;
 	m_last_profile_used_cs_ncg = false;
 	m_last_profile_converged = false;
@@ -2320,6 +2363,11 @@ void Simulation::SetNCGRestart(NCGRestartMode mode, unsigned int period)
 	}
 }
 
+void Simulation::SetProfileLineSearchDecisions(bool enabled)
+{
+	m_profile_line_search_decisions = enabled;
+}
+
 void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant)
 {
 	if (!m_profile_logging_enabled)
@@ -2348,7 +2396,7 @@ static std::ofstream quality_profile_file;
 		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (extended_profile_file.is_open())
 		{
-			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts\n";
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
 			extended_profile_file.flush();
 		}
 		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
@@ -2433,7 +2481,13 @@ initialized = true;
 			<< g_cs_profile_full_linesearch_calls << ","
 			<< g_cs_profile_skipped_linesearch_calls << ","
 			<< g_cs_profile_unit_step_accepts << ","
-			<< m_last_profile_ncg_restarts << "\n";
+			<< m_last_profile_ncg_restarts << ","
+			<< g_cs_profile_armijo_rejections << ","
+			<< g_cs_profile_armijo_failures << ","
+			<< g_cs_profile_armijo_fallbacks << ","
+			<< g_cs_profile_accepted_candidate_sum << ","
+			<< g_cs_profile_accepted_candidate_count << ","
+			<< (m_profile_line_search_decisions ? 1 : 0) << "\n";
 		extended_profile_file.flush();
 	}
 
@@ -6287,6 +6341,7 @@ ScalarType Simulation::lineSearchCSSerial(const VectorX& x, const VectorX& gradi
 	ScalarType step = 1.0;
 	ScalarType accepted_energy = current_energy;
 	bool accepted = false;
+	unsigned int rejected_candidates = 0u;
 	while (step > 1e-5)
 	{
 		const ScalarType candidate_energy = evaluate_candidate_energy(step);
@@ -6295,13 +6350,25 @@ ScalarType Simulation::lineSearchCSSerial(const VectorX& x, const VectorX& gradi
 		{
 			accepted = true;
 			accepted_energy = candidate_energy;
+			if (m_profile_line_search_decisions)
+			{
+				++g_cs_profile_accepted_candidate_count;
+				g_cs_profile_accepted_candidate_sum += rejected_candidates;
+				g_cs_profile_armijo_rejections += rejected_candidates;
+			}
 			break;
 		}
+		++rejected_candidates;
 		step *= m_ls_beta;
 	}
 	if (!accepted)
 	{
 		step = 0.0;
+		if (m_profile_line_search_decisions)
+		{
+			++g_cs_profile_armijo_failures;
+			g_cs_profile_armijo_rejections += rejected_candidates;
+		}
 	}
 
 	m_ls_step_size = step;
@@ -6452,6 +6519,22 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		configure_choose_final(0, 1, 0, 0u, 1u, 0u, fallback_K, static_cast<float>(m_ls_beta));
 		glDispatchCompute(1, 1, 1);
 		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		if (m_profile_line_search_decisions)
+		{
+			CSLineSearchResultGPU decision = {};
+			if (ReadCSLineSearchResult(ResultID, decision))
+			{
+				RecordCSLineSearchDecision(decision, static_cast<unsigned int>(fallback_K));
+				if (decision.accepted != 0 && decision.step >= 0.999f)
+				{
+					++g_cs_profile_unit_step_accepts;
+				}
+			}
+			else
+			{
+				++g_cs_profile_armijo_failures;
+			}
+		}
 
 		glUseProgram(energy_for_linesearch_program);
 		glUniform1i(include_current_candidate_location, 0);
@@ -6573,6 +6656,18 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	glUniform1ui(final_shortcut_budget_location, 0u);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+	if (m_profile_line_search_decisions)
+	{
+		CSLineSearchResultGPU decision = {};
+		if (ReadCSLineSearchResult(ResultID, decision))
+		{
+			RecordCSLineSearchDecision(decision, static_cast<unsigned int>(fallback_K));
+		}
+		else
+		{
+			++g_cs_profile_armijo_failures;
+		}
+	}
 
 	comp_params.t0 = 1.0f;
 	comp_params.K = base_K;

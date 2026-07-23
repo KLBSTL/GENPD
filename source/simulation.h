@@ -255,6 +255,7 @@ inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; 
 	void SetBatchedLineSearchK(unsigned int candidate_count);
 	void SetArmijoBeta(ScalarType beta);
 	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
+	void SetProfileLineSearchDecisions(bool enabled);
 protected:
 
 	// simulation constants
@@ -418,6 +419,7 @@ protected:
 	bool m_verbose_show_factorization_warning;
 	bool m_profile_logging_enabled;
 bool m_quality_metrics_enabled;
+bool m_profile_line_search_decisions;
 std::string m_reference_export_dir;
 std::string m_quality_reference_dir;
 unsigned int m_quality_checkpoint_stride;
