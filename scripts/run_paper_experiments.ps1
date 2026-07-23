@@ -200,6 +200,30 @@ function Test-RunComplete {
     return $true
 }
 
+function Test-CalibrationArtifactsComplete {
+    param([string]$OutputDir, [int]$Frames, [int]$Warmup)
+    $profilePath = Join-Path $OutputDir 'frame_profile.csv'
+    $qualityPath = Join-Path $OutputDir 'quality_metrics.csv'
+    $presentationPath = Join-Path $OutputDir 'frame_presentation.csv'
+    $metadataPath = Join-Path $OutputDir 'run_metadata.json'
+    if (-not (Test-Path -LiteralPath $profilePath) -or -not (Test-Path -LiteralPath $qualityPath) -or
+        -not (Test-Path -LiteralPath $presentationPath) -or -not (Test-Path -LiteralPath $metadataPath)) { return $false }
+    $profileRows = @(Import-Csv -LiteralPath $profilePath | Where-Object { [int]$_.frame -ge $Warmup })
+    $presentationRows = @(Import-Csv -LiteralPath $presentationPath | Where-Object { [int]$_.frame -ge $Warmup })
+    $qualityRows = @(Import-Csv -LiteralPath $qualityPath)
+    if ($profileRows.Count -ne $Frames -or $presentationRows.Count -ne $Frames -or $qualityRows.Count -eq 0) { return $false }
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    if ([bool]$metadata.benchmark.no_render -or -not [bool]$metadata.benchmark.sync_gpu -or -not [bool]$metadata.benchmark.disable_vsync) {
+        return $false
+    }
+    foreach ($row in $presentationRows) {
+        if ($row.rendered -ne '1' -or $row.gpu_sync_enabled -ne '1' -or [int]$row.screen_width -ne $renderWidth -or [int]$row.screen_height -ne $renderHeight) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Invoke-Reference {
     param([hashtable]$Scene, [int]$ClothDimension)
     $caseId = '{0}-d{1}' -f $Scene.id, $ClothDimension
@@ -266,7 +290,7 @@ function Invoke-Calibration {
                         Write-Host "[dry-run] calibration $caseId"
                         continue
                     }
-                    if ($Force -or -not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality -RequirePresentation)) {
+                    if ($Force -or -not (Test-CalibrationArtifactsComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup)) {
                         New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
                         & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-calibration-$caseId") `
                             -Frames $qualityFrames -Warmup $qualityWarmup -SolverVariant $variant -IterationsPerFrame $budget `
@@ -336,6 +360,13 @@ function Invoke-Performance {
 }
 
 function Invoke-Stability {
+    $selectedPath = Join-Path $RunRoot 'selected_budgets.csv'
+    if (-not (Test-Path -LiteralPath $selectedPath)) { throw "Missing calibration selection: $selectedPath" }
+    $selectedBudget = @(Import-Csv -LiteralPath $selectedPath | Where-Object {
+        $_.scene_id -eq 'moving-sphere' -and [int]$_.cloth_dimension -eq 256 -and $_.solver_variant -eq 'gpu-gather-fusion-batched-ls-persistent'
+    })
+    if ($selectedBudget.Count -ne 1) { throw 'Expected one selected persistent budget for the rendered stability protocol.' }
+    $iterationsPerFrame = [int]$selectedBudget[0].iterations_per_frame
     $rows = @()
     foreach ($dt in @((1.0 / 60.0), 0.0333, 0.05)) {
         foreach ($stretch in @(40.0, 80.0, 160.0)) {
@@ -348,7 +379,7 @@ function Invoke-Stability {
                     New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
                     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-stability-$caseId") `
                         -Frames $performanceFrames -Warmup $performanceWarmup -SolverVariant 'gpu-gather-fusion-batched-ls-persistent' `
-                        -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -QualityMetrics `
+                        -IterationsPerFrame $iterationsPerFrame -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -QualityMetrics `
                         -ExtraArgs (Get-CaseExtraArgs -ClothDimension 256 -ScenePath 'scenes\moving_sphere_cloth.xml' -Timestep $dt -Stretch $stretch -Bending 20.0)
                 }
                 $profileRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })

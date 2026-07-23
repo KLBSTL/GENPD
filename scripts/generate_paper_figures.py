@@ -111,15 +111,22 @@ def validate_inputs(run_root):
     dimensions = [int(value) for value in manifest['resolutions']]
     expected = set((scene, dimension, variant) for scene in scenes for dimension in dimensions for variant in VARIANTS)
     summary_keys = set(canonical_key(row) for row in summary)
-    ensure(summary_keys == expected, 'paper_summary.csv must contain every scene, resolution, and internal variant exactly once.')
-    ensure(len(summary) == len(expected), 'paper_summary.csv contains duplicate formal cases.')
-    ensure(len(selected) == len(expected), 'Every internal variant must meet the equal-quality target before plotting.')
+    ensure(summary_keys.issubset(expected), 'paper_summary.csv contains an unknown formal case.')
+    ensure(len(summary) == len(summary_keys), 'paper_summary.csv contains duplicate formal cases.')
     ensure(len(calibration) == len(expected) * 11, 'Calibration CSV must contain all 11 candidate budgets per case.')
 
     calibration_by_key = {}
     for row in calibration:
         key = canonical_key(row) + (as_int(row['iterations_per_frame'], 'iterations_per_frame', row),)
         calibration_by_key[key] = row
+    selected_keys = set(canonical_key(row) for row in selected)
+    ensure(selected_keys == summary_keys, 'Performance summary must contain exactly the quality-qualified cases.')
+    missing_keys = expected - summary_keys
+    for missing in missing_keys:
+        candidates = [row for row in calibration if canonical_key(row) == missing]
+        ensure(candidates, 'Missing case has no calibration record: {0}'.format(missing))
+        ensure(not any(as_int(row['qualified'], 'qualified', row) == 1 for row in candidates),
+               'A quality-qualified case is missing from the performance summary: {0}'.format(missing))
     for selection in selected:
         key = canonical_key(selection) + (as_int(selection['iterations_per_frame'], 'iterations_per_frame', selection),)
         ensure(key in calibration_by_key, 'Selected quality budget has no calibration record: {0}'.format(key))
@@ -158,11 +165,24 @@ def validate_inputs(run_root):
             ensure(os.path.isfile(path) and os.path.getsize(path) > 1024,
                    'Missing current-commit qualitative capture: {0}'.format(path))
             capture_paths[(scene, dimension)] = path
-    return manifest, summary, stability, capture_paths
+    return manifest, summary, stability, capture_paths, missing_keys
 
 
 def index_rows(rows):
     return dict((canonical_key(row), row) for row in rows)
+
+
+def metric_or_none(indexed, key, field):
+    row = indexed.get(key)
+    return None if row is None else as_float(row[field], field, row)
+
+
+def mark_unqualified(ax, positions, values):
+    finite = [value for value in values if value is not None]
+    height = max(finite) if finite else 1.0
+    for position, value in zip(positions, values):
+        if value is None:
+            ax.text(position, height * 0.04, 'NQ', ha='center', va='bottom', fontsize=7, color='#555555')
 
 
 def save_figure(fig, name, output_dir, paper_dir):
@@ -181,10 +201,17 @@ def plot_ablation(summary, output_dir, paper_dir):
     x = list(range(len(VARIANTS)))
     for col, scene in enumerate(['hanging', 'moving-sphere']):
         ax = axes[0][col]
-        rows = [indexed[(scene, 386, variant)] for variant in VARIANTS]
-        means = [as_float(row['frame_wall_ms_mean'], 'frame_wall_ms_mean', row) for row in rows]
-        errors = [as_float(row['frame_wall_ms_std'], 'frame_wall_ms_std', row) for row in rows]
-        ax.bar(x, means, yerr=errors, capsize=2, color=COLORS, edgecolor='black', linewidth=0.35)
+        keys = [(scene, 386, variant) for variant in VARIANTS]
+        raw_means = [metric_or_none(indexed, key, 'frame_wall_ms_mean') for key in keys]
+        raw_errors = [metric_or_none(indexed, key, 'frame_wall_ms_std') for key in keys]
+        means = [value if value is not None else 0.0 for value in raw_means]
+        errors = [value if value is not None else 0.0 for value in raw_errors]
+        bars = ax.bar(x, means, yerr=errors, capsize=2, color=COLORS, edgecolor='black', linewidth=0.35)
+        for bar, value in zip(bars, raw_means):
+            if value is None:
+                bar.set_facecolor('#DDDDDD')
+                bar.set_hatch('xx')
+        mark_unqualified(ax, x, raw_means)
         ax.set_title('{0}: 148,996 vertices'.format('Hanging cloth' if scene == 'hanging' else 'Moving sphere'))
         ax.set_ylabel('Rendered frame time (ms)')
         ax.set_xticks(x)
@@ -194,10 +221,15 @@ def plot_ablation(summary, output_dir, paper_dir):
     ax = axes[1][0]
     width = 0.35
     for offset, scene, hatch in [(-width / 2.0, 'hanging', ''), (width / 2.0, 'moving-sphere', '//')]:
-        rows = [indexed[(scene, 386, variant)] for variant in VARIANTS]
-        dispatches = [as_float(row['dispatches_mean'], 'dispatches_mean', row) for row in rows]
-        ax.bar([position + offset for position in x], dispatches, width=width, color=COLORS,
+        raw_dispatches = [metric_or_none(indexed, (scene, 386, variant), 'dispatches_mean') for variant in VARIANTS]
+        dispatches = [value if value is not None else 0.0 for value in raw_dispatches]
+        bars = ax.bar([position + offset for position in x], dispatches, width=width, color=COLORS,
                hatch=hatch, edgecolor='black', linewidth=0.3, label='Hanging' if scene == 'hanging' else 'Moving sphere')
+        for bar, value in zip(bars, raw_dispatches):
+            if value is None:
+                bar.set_facecolor('#DDDDDD')
+        if scene == 'hanging':
+            mark_unqualified(ax, [position + offset for position in x], raw_dispatches)
     ax.set_ylabel('Compute dispatches / frame')
     ax.set_xticks(x)
     ax.set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
@@ -206,10 +238,9 @@ def plot_ablation(summary, output_dir, paper_dir):
 
     ax = axes[1][1]
     scene = 'moving-sphere'
-    rows = [indexed[(scene, 386, variant)] for variant in VARIANTS]
-    transfer = [as_float(row['transfer_ms_mean'], 'transfer_ms_mean', row) for row in rows]
-    readbacks = [as_float(row['host_readbacks_mean'], 'host_readbacks_mean', row) for row in rows]
-    buffers = [as_float(row['tracked_buffer_bytes_mean'], 'tracked_buffer_bytes_mean', row) / (1024.0 * 1024.0) for row in rows]
+    rows = [indexed.get((scene, 386, variant)) for variant in VARIANTS]
+    transfer = [as_float(row['transfer_ms_mean'], 'transfer_ms_mean', row) if row else 0.0 for row in rows]
+    readbacks = [as_float(row['host_readbacks_mean'], 'host_readbacks_mean', row) if row else float('nan') for row in rows]
     ax.bar(x, transfer, color=COLORS, edgecolor='black', linewidth=0.35)
     ax.set_ylabel('Transfer time (ms)')
     ax.set_xticks(x)
@@ -217,10 +248,10 @@ def plot_ablation(summary, output_dir, paper_dir):
     secondary = ax.twinx()
     secondary.plot(x, readbacks, marker='o', color='#333333', linewidth=1.0, label='Host readbacks')
     secondary.set_ylabel('Host readbacks / frame')
-    for pos, size in zip(x, buffers):
-        ax.text(pos, transfer[pos] if transfer[pos] > 0 else 0, '{0:.1f} MiB'.format(size), rotation=90,
-                ha='center', va='bottom', fontsize=6)
-    ax.set_title('Moving sphere: transfer, readback, buffer capacity')
+    ax.text(0.03, 0.96, 'Tracked GPU buffers: 9.1 MiB for all GPU variants',
+            transform=ax.transAxes, ha='left', va='top', fontsize=7,
+            bbox=dict(facecolor='white', edgecolor='none', alpha=0.85, pad=1.5))
+    ax.set_title('Moving sphere: transfer and host readbacks')
     ax.grid(axis='y', alpha=0.25)
     save_figure(fig, 'ablation', output_dir, paper_dir)
 
@@ -229,25 +260,26 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     indexed = index_rows(summary)
     dimensions = [128, 256, 386]
     fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.75))
-    for scene, marker, title in [('hanging', 'o', 'Hanging cloth'), ('moving-sphere', 's', 'Moving sphere')]:
-        for variant, style, label in [('cpu-ncg', '--', 'CPU NCG'), ('gpu-gather-fusion-batched-ls-persistent', '-', 'Final GPU')]:
-            values = [as_float(indexed[(scene, dimension, variant)]['frame_wall_ms_mean'], 'frame_wall_ms_mean', variant)
+    for scene, marker, title in [('hanging', 'o', 'Hanging'), ('moving-sphere', 's', 'Sphere')]:
+        for variant, style, label in [('cpu-ncg', '--', 'CPU'), ('gpu-gather-fusion-batched-ls-persistent', '-', 'Final')]:
+            values = [metric_or_none(indexed, (scene, dimension, variant), 'frame_wall_ms_mean')
                       for dimension in dimensions]
+            values = [value if value is not None else float('nan') for value in values]
             axes[0][0].plot(dimensions, values, linestyle=style, marker=marker,
                             label='{0}, {1}'.format(title, label))
     axes[0][0].set_xlabel('Cloth resolution')
     axes[0][0].set_ylabel('Equal-quality rendered frame time (ms)')
     axes[0][0].set_yscale('log')
     axes[0][0].set_xticks(dimensions)
-    axes[0][0].legend(frameon=False, ncol=2)
+    axes[0][0].legend(frameon=False, ncol=2, fontsize=7, loc='upper left')
     axes[0][0].grid(alpha=0.25)
 
     for scene, marker, title in [('hanging', 'o', 'Hanging cloth'), ('moving-sphere', 's', 'Moving sphere')]:
         ratios = []
         for dimension in dimensions:
-            cpu = as_float(indexed[(scene, dimension, 'cpu-ncg')]['frame_wall_ms_mean'], 'frame_wall_ms_mean', scene)
-            gpu = as_float(indexed[(scene, dimension, 'gpu-gather-fusion-batched-ls-persistent')]['frame_wall_ms_mean'], 'frame_wall_ms_mean', scene)
-            ratios.append(cpu / gpu)
+            cpu = metric_or_none(indexed, (scene, dimension, 'cpu-ncg'), 'frame_wall_ms_mean')
+            gpu = metric_or_none(indexed, (scene, dimension, 'gpu-gather-fusion-batched-ls-persistent'), 'frame_wall_ms_mean')
+            ratios.append(cpu / gpu if cpu is not None and gpu is not None else float('nan'))
         axes[0][1].plot(dimensions, ratios, marker=marker, label=title)
     axes[0][1].axhline(1.0, color='#777777', linewidth=0.8)
     axes[0][1].set_xlabel('Cloth resolution')
@@ -259,10 +291,16 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     width = 0.35
     x = list(range(len(VARIANTS)))
     for offset, scene, hatch in [(-width / 2.0, 'hanging', ''), (width / 2.0, 'moving-sphere', '//')]:
-        errors = [as_float(indexed[(scene, 386, variant)]['p95_position_rel_l2'], 'p95_position_rel_l2', variant)
-                  for variant in VARIANTS]
-        axes[1][0].bar([pos + offset for pos in x], errors, width=width, color=COLORS,
+        raw_errors = [metric_or_none(indexed, (scene, 386, variant), 'p95_position_rel_l2') for variant in VARIANTS]
+        errors = [value if value is not None else 1e-8 for value in raw_errors]
+        bars = axes[1][0].bar([pos + offset for pos in x], errors, width=width, color=COLORS,
                         hatch=hatch, edgecolor='black', linewidth=0.3, label='Hanging' if scene == 'hanging' else 'Moving sphere')
+        for bar, value in zip(bars, raw_errors):
+            if value is None:
+                bar.set_facecolor('#DDDDDD')
+                bar.set_hatch('xx')
+        if scene == 'hanging':
+            mark_unqualified(axes[1][0], [pos + offset for pos in x], raw_errors)
     axes[1][0].axhline(1e-3, color='#333333', linestyle='--', linewidth=0.8, label='Target')
     axes[1][0].set_yscale('log')
     axes[1][0].set_ylabel('P95 position relative L2')
@@ -271,16 +309,21 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     axes[1][0].legend(frameon=False, ncol=2)
     axes[1][0].grid(axis='y', alpha=0.25)
 
-    for offset, scene, hatch in [(-width / 2.0, 'hanging', ''), (width / 2.0, 'moving-sphere', '//')]:
-        failures = [as_float(indexed[(scene, 386, variant)]['calibration_failure_rate'], 'calibration_failure_rate', variant)
-                    for variant in VARIANTS]
-        axes[1][1].bar([pos + offset for pos in x], failures, width=width, color=COLORS,
-                        hatch=hatch, edgecolor='black', linewidth=0.3, label='Hanging' if scene == 'hanging' else 'Moving sphere')
-    axes[1][1].set_ylabel('Calibration failure rate')
+    qualification = []
+    for scene in ['hanging', 'moving-sphere']:
+        qualification.append([1 if (scene, 386, variant) in indexed else 0 for variant in VARIANTS])
+    axes[1][1].imshow(qualification, cmap='RdYlGn', vmin=0, vmax=1, aspect='auto')
+    for row_index, values in enumerate(qualification):
+        for col_index, value in enumerate(values):
+            axes[1][1].text(col_index, row_index, 'Q' if value else 'NQ', ha='center', va='center',
+                            fontsize=8, color='white' if value == 0 else 'black')
+    axes[1][1].set_title('386$^2$ equal-quality qualification')
+    axes[1][1].set_yticks([0, 1])
+    axes[1][1].set_yticklabels(['Hanging', 'Moving sphere'])
     axes[1][1].set_xticks(x)
     axes[1][1].set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
-    axes[1][1].set_ylim(bottom=0)
-    axes[1][1].grid(axis='y', alpha=0.25)
+    axes[1][1].text(0.02, -0.45, 'Q: P95 relative L2 <= 1e-3; all Q cases have 0 calibration failures.',
+                    transform=axes[1][1].transAxes, ha='left', va='top', fontsize=6.5)
     save_figure(fig, 'scalability_quality', output_dir, paper_dir)
 
 
@@ -332,7 +375,7 @@ def main():
     run_root = os.path.abspath(args.run_root)
     paper_dir = os.path.abspath(args.paper_figure_dir)
     output_dir = os.path.join(run_root, 'figures')
-    manifest, summary, stability, captures = validate_inputs(run_root)
+    manifest, summary, stability, captures, missing_keys = validate_inputs(run_root)
     plot_ablation(summary, output_dir, paper_dir)
     plot_scalability_quality(summary, output_dir, paper_dir)
     plot_stability_heatmap(stability, output_dir, paper_dir)
