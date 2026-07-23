@@ -10,7 +10,8 @@ enum GenPDExperimentVariant
 	GENPD_VARIANT_GPU_GATHER_NO_FUSION,
 	GENPD_VARIANT_GPU_GATHER_FUSION,
 	GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS,
-	GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT
+	GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT,
+	GENPD_VARIANT_GPU_XPBD_JACOBI
 };
 
 bool GenPDParseExperimentVariant(const std::string& value, GenPDExperimentVariant& variant);
@@ -23,5 +24,6 @@ bool GenPDExperimentUsesEdgeScatter();
 bool GenPDExperimentUsesFusedGradientStats();
 bool GenPDExperimentUsesBatchedLineSearch();
 bool GenPDExperimentUsesPersistentBuffers();
+bool GenPDExperimentUsesGPUXPBD();
 
 #endif

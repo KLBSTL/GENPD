@@ -99,6 +99,9 @@ namespace
 	unsigned int g_cs_profile_reduction_dispatches = 0;
 	unsigned int g_cs_profile_xupdate_dispatches = 0;
 	unsigned int g_cs_profile_descent_dispatches = 0;
+	unsigned int g_cs_profile_xpbd_constraint_dispatches = 0;
+	unsigned int g_cs_profile_xpbd_apply_dispatches = 0;
+	unsigned int g_cs_profile_xpbd_collision_dispatches = 0;
 	unsigned int g_cs_profile_host_readbacks = 0;
 	unsigned int g_cs_profile_solver_finish_calls = 0;
 	unsigned int g_cs_unit_step_shortcut_budget = 0;
@@ -114,6 +117,8 @@ namespace
 	std::size_t g_cs_render_normal_buffer_bytes = 0;
 	std::size_t g_cs_state_position_buffer_bytes = 0;
 	std::size_t g_cs_state_stats_buffer_bytes = 0;
+	std::size_t g_cs_xpbd_delta_buffer_bytes = 0;
+	std::size_t g_cs_xpbd_lambda_buffer_bytes = 0;
 	unsigned int g_cs_active_iteration_budget = 0;
 	bool g_cs_gpu_state_active_frame = false;
 
@@ -474,6 +479,9 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_reduction_dispatches = 0;
 		g_cs_profile_xupdate_dispatches = 0;
 		g_cs_profile_descent_dispatches = 0;
+		g_cs_profile_xpbd_constraint_dispatches = 0;
+		g_cs_profile_xpbd_apply_dispatches = 0;
+		g_cs_profile_xpbd_collision_dispatches = 0;
 		g_cs_profile_host_readbacks = 0;
 		g_cs_profile_solver_finish_calls = 0;
 		g_cs_prefetched_energy_valid = false;
@@ -492,6 +500,8 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_render_normal_buffer_bytes = 0;
 		g_cs_state_position_buffer_bytes = 0;
 		g_cs_state_stats_buffer_bytes = 0;
+		g_cs_xpbd_delta_buffer_bytes = 0;
+		g_cs_xpbd_lambda_buffer_bytes = 0;
 	}
 
 	std::size_t CurrentCSProfileBufferBytes(const std::vector<float>& scratch)
@@ -499,7 +509,7 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		return g_cs_gradient_buffer_bytes + g_cs_descent_buffer_bytes + g_cs_x_buffer_bytes + g_cs_y_buffer_bytes
 			+ g_cs_energy_buffer_bytes + g_cs_inertia_buffer_bytes + g_cs_collision_velocity_buffer_bytes
 			+ g_cs_collision_primitive_buffer_bytes + g_cs_render_normal_buffer_bytes
-			+ g_cs_state_position_buffer_bytes + g_cs_state_stats_buffer_bytes + scratch.size() * sizeof(float);
+			+ g_cs_state_position_buffer_bytes + g_cs_state_stats_buffer_bytes + g_cs_xpbd_delta_buffer_bytes + g_cs_xpbd_lambda_buffer_bytes + scratch.size() * sizeof(float);
 	}
 }
 
@@ -624,6 +634,8 @@ m_quality_checkpoint_stride = 1;
 	m_collision_resolve_shader_file = "./shaders/collisionResolve.comp";
 	m_normal_from_triangles_shader_file = "./shaders/normalFromTriangles.comp";
 	m_cs2_state_shader_file = "./shaders/cs2State.comp";
+	m_xpbd_constraints_shader_file = "./shaders/xpbd_constraints.comp";
+	m_xpbd_apply_shader_file = "./shaders/xpbd_apply.comp";
 
 
 	use_cs = true;
@@ -652,6 +664,8 @@ m_quality_checkpoint_stride = 1;
 		glGenBuffers(1, &csNormalID);
 		glGenBuffers(1, &csPositionID);
 		glGenBuffers(1, &csStateStatsID);
+		glGenBuffers(1, &xpbdDeltaID);
+		glGenBuffers(1, &xpbdLambdaID);
 
 	}
 
@@ -738,6 +752,8 @@ void Simulation::set_shader()
 	compile_compute_program(collision_resolve_shader, collision_resolve_program, load_shader_source(m_collision_resolve_shader_file, ""), "collision-resolve compute shader");
 	compile_compute_program(normal_from_triangles_shader, normal_from_triangles_program, load_shader_source(m_normal_from_triangles_shader_file, ""), "GPU normal compute shader");
 	compile_compute_program(cs2_state_shader, cs2_state_program, load_shader_source(m_cs2_state_shader_file, ""), "CS2 GPU state compute shader");
+	compile_compute_program(xpbd_constraints_shader, xpbd_constraints_program, load_shader_source(m_xpbd_constraints_shader_file, ""), "XPBD constraint compute shader");
+	compile_compute_program(xpbd_apply_shader, xpbd_apply_program, load_shader_source(m_xpbd_apply_shader_file, ""), "XPBD apply compute shader");
 }
 
 void Simulation::Create_SSBO()
@@ -1540,6 +1556,114 @@ void Simulation::collisionPostProcessCS(VectorX& x, VectorX& v)
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
+bool Simulation::performGPUXPBD(VectorX& x)
+{
+	if (!use_cs || !m_mesh || xpbd_constraints_program == 0 || xpbd_apply_program == 0
+		|| m_integration_method != INTEGRATION_IMPLICIT_EULER || sizeof(ScalarType) != sizeof(float))
+	{
+		return false;
+	}
+
+	uploadCSResourcesIfNeeded();
+	if (x.size() != m_mesh->m_system_dimension)
+	{
+		return false;
+	}
+
+	const std::size_t position_bytes = static_cast<std::size_t>(m_mesh->m_system_dimension) * sizeof(ScalarType);
+	const std::size_t delta_bytes = static_cast<std::size_t>(m_mesh->m_vertices_number) * 4u * sizeof(float);
+	const std::size_t lambda_bytes = m_mesh->my_edge.size() * sizeof(float);
+	EnsureCSBufferStorage(xID, position_bytes, g_cs_x_buffer_bytes);
+	EnsureCSBufferStorage(xpbdDeltaID, delta_bytes, g_cs_xpbd_delta_buffer_bytes);
+	EnsureCSBufferStorage(xpbdLambdaID, lambda_bytes, g_cs_xpbd_lambda_buffer_bytes);
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, x.data());
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, vertexEdgeOffsetID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21, xpbdDeltaID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 22, xpbdLambdaID);
+
+	const float zero = 0.0f;
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xpbdDeltaID);
+	glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xpbdLambdaID);
+	glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32F, GL_RED, GL_FLOAT, &zero);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+
+	bool use_gpu_collision = false;
+	if (m_processing_collision && m_scene && !m_scene->IsEmpty())
+	{
+		uploadCSCollisionPrimitives();
+		use_gpu_collision = !m_cs_collision_primitives.empty();
+		if (use_gpu_collision)
+		{
+			EnsureCSBufferStorage(collisionVelocityID, position_bytes, g_cs_collision_velocity_buffer_bytes);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, collisionVelocityID);
+			glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, m_mesh->m_current_velocities.data());
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
+		}
+	}
+
+	static GLint collision_vertex_count_location = -1;
+	static GLint collision_primitive_count_location = -1;
+	static GLint collision_restitution_location = -1;
+	static GLint collision_friction_location = -1;
+	if (use_gpu_collision && collision_vertex_count_location < 0)
+	{
+		collision_vertex_count_location = glGetUniformLocation(collision_resolve_program, "vertex_count");
+		collision_primitive_count_location = glGetUniformLocation(collision_resolve_program, "primitive_count");
+		collision_restitution_location = glGetUniformLocation(collision_resolve_program, "restitution_coefficient");
+		collision_friction_location = glGetUniformLocation(collision_resolve_program, "friction_coefficient");
+	}
+
+	const GLuint constraint_groups = ComputeCSPartialGroupCount(static_cast<std::size_t>(m_mesh->my_edge.size()));
+	const GLuint vertex_groups = ComputeCSGradientGroupCount(static_cast<std::size_t>(m_mesh->m_vertices_number));
+	for (unsigned int iteration = 0; iteration < m_iterations_per_frame; ++iteration)
+	{
+		{
+			ScopedCSDebugGroup constraint_group("GenPD XPBD constraint Jacobi");
+			glUseProgram(xpbd_constraints_program);
+			++g_cs_profile_xpbd_constraint_dispatches;
+			glDispatchCompute(constraint_groups, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		}
+		{
+			ScopedCSDebugGroup apply_group("GenPD XPBD vertex apply");
+			glUseProgram(xpbd_apply_program);
+			++g_cs_profile_xpbd_apply_dispatches;
+			glDispatchCompute(vertex_groups, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+		}
+		if (use_gpu_collision)
+		{
+			ScopedCSDebugGroup collision_group("GenPD XPBD collision resolve");
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, collisionPrimitiveID);
+			glUseProgram(collision_resolve_program);
+			glUniform1ui(collision_vertex_count_location, static_cast<GLuint>(m_mesh->m_vertices_number));
+			glUniform1ui(collision_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
+			glUniform1f(collision_restitution_location, static_cast<float>(m_restitution_coefficient));
+			glUniform1f(collision_friction_location, static_cast<float>(m_friction_coefficient));
+			++g_cs_profile_xpbd_collision_dispatches;
+			glDispatchCompute(vertex_groups, 1, 1);
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+		}
+	}
+
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
+	++g_cs_profile_solver_finish_calls;
+	glFinish();
+	++g_cs_profile_host_readbacks;
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, x.data());
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	return VectorIsFinite(x);
+}
+
 GLuint Simulation::CS2RenderPositionBuffer() const
 {
 	return xID;
@@ -1815,6 +1939,12 @@ Simulation::~Simulation()
 	glDeleteShader(cs2_state_shader);
 	glDeleteProgram(cs2_state_program);
 
+	glDeleteShader(xpbd_constraints_shader);
+	glDeleteProgram(xpbd_constraints_program);
+
+	glDeleteShader(xpbd_apply_shader);
+	glDeleteProgram(xpbd_apply_program);
+
 	glDeleteShader(descent_shader);
 	glDeleteProgram(descent_program);
 
@@ -1840,6 +1970,8 @@ Simulation::~Simulation()
 	glDeleteBuffers(1, &csNormalID);
 	glDeleteBuffers(1, &csPositionID);
 	glDeleteBuffers(1, &csStateStatsID);
+	glDeleteBuffers(1, &xpbdDeltaID);
+	glDeleteBuffers(1, &xpbdLambdaID);
 	if (pUBO != 0)
 	{
 		glDeleteBuffers(1, &pUBO);
@@ -2178,7 +2310,7 @@ static std::ofstream quality_profile_file;
 		experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2279,7 +2411,12 @@ initialized = true;
 			<< g_cs_x_buffer_bytes << ","
 			<< g_cs_y_buffer_bytes << ","
 			<< test_.size() * sizeof(float) << ","
-			<< g_cs_state_position_buffer_bytes << "\n";
+			<< g_cs_state_position_buffer_bytes << ","
+			<< g_cs_profile_xpbd_constraint_dispatches << ","
+			<< g_cs_profile_xpbd_apply_dispatches << ","
+			<< g_cs_profile_xpbd_collision_dispatches << ","
+			<< g_cs_xpbd_delta_buffer_bytes << ","
+			<< g_cs_xpbd_lambda_buffer_bytes << "\n";
 		experiment_profile_file.flush();
 
 }
@@ -3795,6 +3932,7 @@ void Simulation::integrateImplicitMethod()
 	inteti.Tic();
 	myti.Tic();
 	const bool use_cs_ncg = use_cs && GenPDExperimentUsesCSNCG() && (m_optimization_method == OPTIMIZATION_METHOD_NCG);
+	const bool use_gpu_xpbd = use_cs && GenPDExperimentUsesGPUXPBD() && (m_optimization_method == OPTIMIZATION_METHOD_NCG) && (m_integration_method == INTEGRATION_IMPLICIT_EULER);
 	bool use_cs_gpu_state = use_cs_ncg && shouldUseCS2GpuState();
 	if (m_cs_cpu_state_stale && !use_cs_gpu_state)
 	{
@@ -4011,6 +4149,10 @@ void Simulation::integrateImplicitMethod()
 	g_cs_active_iteration_budget = iteration_budget;
 	g_cs_gpu_state_active_frame = use_cs_gpu_state;
 
+	const bool xpbd_executed = use_gpu_xpbd && performGPUXPBD(x);
+	if (!xpbd_executed)
+	{
+
 	for (m_current_iteration = 0; !converge && m_current_iteration < iteration_budget; ++m_current_iteration)
 	{
 		//if (m_processing_collision)
@@ -4068,6 +4210,11 @@ void Simulation::integrateImplicitMethod()
 			}
 		}
 
+	}
+	}
+	else
+	{
+		m_current_iteration = iteration_budget;
 	}
 
 	TimerWrapper getD;
@@ -4185,7 +4332,7 @@ void Simulation::integrateImplicitMethod()
 	m_last_profile_optimization_ms = t_optimization.DurationInSeconds() * 1000.0;
 	m_last_profile_position_stats_ms = position_stats_ms;
 	m_last_profile_step_size = m_ls_step_size;
-	if (use_cs_ncg)
+	if (use_cs_ncg || xpbd_executed)
 	{
 		m_last_profile_objective_energy = g_cs_prefetched_energy_valid ? m_ls_prefetched_energy : 0.0;
 	}
@@ -4204,7 +4351,7 @@ void Simulation::integrateImplicitMethod()
 			m_last_profile_objective_energy = 0.0;
 		}
 	}
-	m_last_profile_gradient_norm = use_cs_ncg ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : gradient_dir.norm();
+	m_last_profile_gradient_norm = use_cs_ncg ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : (xpbd_executed ? 0.0 : gradient_dir.norm());
 	m_last_profile_max_displacement = max_displacement;
 	m_last_profile_max_position = max_position;
 
@@ -4224,7 +4371,7 @@ void Simulation::integrateImplicitMethod()
 	TimerWrapper colli;
 	colli.Tic();
 
-	if (!used_gpu_state_update)
+	if (!used_gpu_state_update && !xpbd_executed)
 	{
 		collisionPostProcessCS(m_mesh->m_current_positions, m_mesh->m_current_velocities);
 	}
