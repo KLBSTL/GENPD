@@ -18,7 +18,7 @@ param(
     [ValidateSet('none', 'periodic', 'non-descent')]
     [string[]]$RestartModes = @('none', 'periodic', 'non-descent'),
     [int]$RestartPeriod = 8,
-    [ValidateSet('fixed', 'adaptive')]
+    [ValidateSet('serial', 'fixed', 'adaptive')]
     [string[]]$Schedules = @('fixed', 'adaptive'),
     [ValidateSet('none', 'iteration', 'frame')]
     [string[]]$AdaptiveHistoryModes = @('none', 'iteration', 'frame'),
@@ -86,6 +86,7 @@ function Sum-Field {
 }
 function Get-ScheduleVariant {
     param([string]$Schedule)
+    if ($Schedule -eq 'serial') { return 'gpu-gather-fusion-serial-ls-persistent' }
     if ($Schedule -eq 'fixed') { return 'gpu-gather-fusion-batched-ls-persistent' }
     return 'gpu-gather-fusion-adaptive-ls-persistent'
 }
@@ -93,6 +94,7 @@ function Get-CaseId {
     param([string]$Schedule, [int]$K, [double]$Beta, [string]$RestartMode, [string]$HistoryMode)
     $betaText = (Format-Double $Beta).Replace('.', 'p')
     if ($Schedule -eq 'adaptive') { return "adaptive-k$K-b$betaText-h$HistoryMode-r$RestartMode" }
+    if ($Schedule -eq 'serial') { return "serial-b$betaText-r$RestartMode" }
     return "fixed-k$K-b$betaText-r$RestartMode"
 }
 function Get-RunExtraArgs {
@@ -141,7 +143,7 @@ function Invoke-Run {
     if ($trace) { $extra += '--profile-line-search-decisions' }
     $parameters = @{
         ProjectRoot = $ProjectRoot; RunLabel = "$RunLabel-$Kind-$caseId$(if ($Kind -eq 'timing') { "-rep$('{0:D2}' -f $Repetition)" })"
-        Frames = $frames; Warmup = $warmup; SolverVariant = $variant; AdaptiveLsHistory = $(if ($Schedule -eq 'adaptive') { $HistoryMode } else { 'frame' })
+        Frames = $frames; Warmup = $warmup; SolverVariant = $variant; AdaptiveLsHistory = $(if ($Schedule -eq 'adaptive') { $HistoryMode } else { 'none' })
         IterationsPerFrame = $IterationsPerFrame; OutputDir = $directory; Uncapped = $true; SyncGpu = $true; DisableVsync = $true
         RenderWidth = 1600; RenderHeight = 900; ProcessTimeoutSeconds = $ProcessTimeoutSeconds; ExtraArgs = $extra
     }
@@ -185,7 +187,8 @@ function Get-CaseSummary {
         rendered_frame_wall_ms_mean = Get-Mean $timingMeans; rendered_frame_wall_ms_std = Get-Std $timingMeans
         rendered_frame_wall_ms_p95 = Get-Percentile @($timingPresentation | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ }) 0.95
         total_ms_mean = Get-Mean $totalMeans; line_search_ms = Get-Mean @($traceProfile | ForEach-Object { Read-Double $_.cs_linesearch_ms } | Where-Object { $null -ne $_ })
-        candidates_per_search = if ($searches -gt 0 -and $Schedule -eq 'adaptive') { $candidateEvaluations / $searches } else { [double]$K }
+        candidates_per_search = if ($Schedule -eq 'serial') { 0.0 } elseif ($searches -gt 0 -and $Schedule -eq 'adaptive') { $candidateEvaluations / $searches } else { [double]$K }
+        candidate_evaluation_measurement = if ($Schedule -eq 'serial') { 'not-applicable-serial' } else { 'batched-candidates-per-search' }
         history_use_ratio = if ($searches -gt 0) { $historyUses / $searches } else { 0.0 }
         first_batch_accept_ratio = if ($searches -gt 0) { $firstAccepts / $searches } else { 0.0 }
         second_batch_accept_ratio = if ($searches -gt 0) { $secondAccepts / $searches } else { 0.0 }
@@ -204,14 +207,15 @@ $manifest = [ordered]@{
     timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; repetitions = $TimingRepetitions; render_width = 1600; render_height = 900 }
     trace = [ordered]@{ frames = $TraceFrames; warmup = $TraceWarmup; quality_reference_dir = $QualityReferenceDir }
     k_values = $KValues; armijo_betas = $Betas; restart_modes = $RestartModes; restart_period = $RestartPeriod
-    schedules = $Schedules; adaptive_history_modes = $AdaptiveHistoryModes; fixed_variant = 'gpu-gather-fusion-batched-ls-persistent'; adaptive_variant = 'gpu-gather-fusion-adaptive-ls-persistent'
+    schedules = $Schedules; adaptive_history_modes = $AdaptiveHistoryModes; serial_variant = 'gpu-gather-fusion-serial-ls-persistent'; fixed_variant = 'gpu-gather-fusion-batched-ls-persistent'; adaptive_variant = 'gpu-gather-fusion-adaptive-ls-persistent'
     process_timeout_seconds = $ProcessTimeoutSeconds; inter_run_delay_milliseconds = $InterRunDelayMilliseconds
 }
 [System.IO.File]::WriteAllText((Join-Path $OutputDir 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
 
 $rows = @()
 foreach ($schedule in $Schedules) {
-    foreach ($k in $KValues) {
+    $scheduleKValues = if ($schedule -eq 'serial') { @(1) } else { $KValues }
+    foreach ($k in $scheduleKValues) {
         foreach ($beta in $Betas) {
             foreach ($restartMode in $RestartModes) {
                 $histories = if ($schedule -eq 'adaptive') { $AdaptiveHistoryModes } else { @('none') }
