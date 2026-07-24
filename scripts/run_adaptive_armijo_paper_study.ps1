@@ -4,6 +4,8 @@ param(
     [string]$RunLabel = 'paper-20260724-adaptive-armijo-r1',
     [string]$RunRoot = '',
     [string]$CalibrationRoot = '',
+    [ValidateSet('archived', 'regenerate')]
+    [string]$ReferenceMode = 'archived',
     [ValidateSet('all', 'references', 'core', 'sensitivity', 'analyze')]
     [string]$Stage = 'all',
     [int]$TimingFrames = 300,
@@ -64,10 +66,13 @@ foreach ($sceneId in $sceneMap.Keys) {
         })
         if ($matches.Count -ne 1) { throw "Expected one qualified persistent calibration row for $sceneId d$dimension." }
         $caseId = "$sceneId-d$dimension"
+        $archivedReferenceDir = [System.IO.Path]::GetFullPath($matches[0].reference_dir)
+        if (-not (Test-Path -LiteralPath $archivedReferenceDir)) { throw "Missing archived quality reference for $sceneId d${dimension}: $archivedReferenceDir" }
+        $referenceDir = if ($ReferenceMode -eq 'archived') { $archivedReferenceDir } else { Join-Path $RunRoot (Join-Path 'references' (Join-Path $caseId 'reference_checkpoints')) }
         $cases += [pscustomobject]@{
             case_id = $caseId; scene_id = $sceneId; scene_path = $sceneMap[$sceneId]; cloth_dimension = $dimension
             iterations_per_frame = [int]$matches[0].iterations_per_frame
-            reference_dir = (Join-Path $RunRoot (Join-Path 'references' (Join-Path $caseId 'reference_checkpoints')))
+            reference_dir = $referenceDir; archived_reference_dir = $archivedReferenceDir
         }
     }
 }
@@ -99,7 +104,7 @@ $manifest = [ordered]@{
     measurement = [ordered]@{ mode = 'rendered-end-to-end'; render_width = $RenderWidth; render_height = $RenderHeight; sync_gpu = $true; disable_vsync = $true; quality_readback_during_timing = $false }
     timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; repetitions = $TimingRepetitions }
     trace = [ordered]@{ frames = $TraceFrames; warmup = $TraceWarmup; decision_trace = $true; timing_separate = $true; position_gate_p95 = 1.0e-3 }
-    reference = [ordered]@{ solver_variant = 'cpu-ncg'; iterations_per_frame = $ReferenceIterations; frames = $TraceFrames; warmup = $TraceWarmup; checkpoint_stride = $ReferenceCheckpointStride }
+    reference = [ordered]@{ source = $ReferenceMode; calibration_commit = 'c73d2bb'; solver_variant = 'cpu-ncg'; iterations_per_frame = $ReferenceIterations; frames = $TraceFrames; warmup = $TraceWarmup; checkpoint_stride = $ReferenceCheckpointStride }
     scenes = @($sceneMap.Keys)
     cloth_dimensions = $dimensions
     core_methods = $coreMethods
@@ -121,6 +126,10 @@ if ($DryRun) { Write-Host "Adaptive Armijo paper dry-run: $RunRoot"; exit 0 }
 
 function Invoke-Reference {
     param($Case)
+    if ($ReferenceMode -eq 'archived') {
+        if (-not (Test-Path -LiteralPath (Join-Path $Case.reference_dir 'reference_state_000000.bin'))) { throw "Missing archived reference for $($Case.case_id)." }
+        return
+    }
     if ((Test-Path -LiteralPath (Join-Path $Case.reference_dir 'reference_state_000000.bin')) -and -not $Force) { return }
     $referenceOutput = Split-Path -Parent $Case.reference_dir
     & $referenceScript -ProjectRoot $ProjectRoot -RunLabel "$RunLabel-reference-$($Case.case_id)" -OutputDir $referenceOutput `
