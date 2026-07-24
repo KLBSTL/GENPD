@@ -56,6 +56,14 @@ $coreMethods = @(
     [pscustomobject]@{ method_id = 'adaptive-k4-history-iteration'; schedule = 'adaptive'; k = 4; beta = 0.5; restart = 'non-descent'; history = 'iteration' },
     [pscustomobject]@{ method_id = 'adaptive-k4-history-frame'; schedule = 'adaptive'; k = 4; beta = 0.5; restart = 'non-descent'; history = 'frame' }
 )
+function Resolve-ReferenceCheckpointDirectory {
+    param([string]$Path)
+    $root = [System.IO.Path]::GetFullPath($Path)
+    foreach ($candidate in @((Join-Path $root 'reference_checkpoints'), $root)) {
+        if (Test-Path -LiteralPath (Join-Path $candidate 'reference_state_000000.bin')) { return $candidate }
+    }
+    throw "Reference checkpoints were not found below: $root"
+}
 $budgetRows = @(Import-Csv -LiteralPath $budgetPath)
 $cases = @()
 foreach ($sceneId in $sceneMap.Keys) {
@@ -66,8 +74,7 @@ foreach ($sceneId in $sceneMap.Keys) {
         })
         if ($matches.Count -ne 1) { throw "Expected one qualified persistent calibration row for $sceneId d$dimension." }
         $caseId = "$sceneId-d$dimension"
-        $archivedReferenceDir = [System.IO.Path]::GetFullPath($matches[0].reference_dir)
-        if (-not (Test-Path -LiteralPath $archivedReferenceDir)) { throw "Missing archived quality reference for $sceneId d${dimension}: $archivedReferenceDir" }
+        $archivedReferenceDir = Resolve-ReferenceCheckpointDirectory -Path $matches[0].reference_dir
         $referenceDir = if ($ReferenceMode -eq 'archived') { $archivedReferenceDir } else { Join-Path $RunRoot (Join-Path 'references' (Join-Path $caseId 'reference_checkpoints')) }
         $cases += [pscustomobject]@{
             case_id = $caseId; scene_id = $sceneId; scene_path = $sceneMap[$sceneId]; cloth_dimension = $dimension

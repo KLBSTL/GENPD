@@ -109,7 +109,8 @@ function Test-RenderedRun {
     $extendedPath = Join-Path $Directory 'frame_profile_extended.csv'
     $presentationPath = Join-Path $Directory 'frame_presentation.csv'
     foreach ($path in @($metadataPath, $extendedPath, $presentationPath)) { if (-not (Test-Path -LiteralPath $path)) { return $false } }
-    if ($RequireQuality -and -not (Test-Path -LiteralPath (Join-Path $Directory 'quality_metrics.csv'))) { return $false }
+    $qualityPath = Join-Path $Directory 'quality_metrics.csv'
+    if ($RequireQuality -and -not (Test-Path -LiteralPath $qualityPath)) { return $false }
     if ($RequireAdaptiveTrace -and -not (Test-Path -LiteralPath (Join-Path $Directory 'line_search_trace.csv'))) { return $false }
     $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
     if ([bool]$metadata.benchmark.no_render -or -not [bool]$metadata.benchmark.sync_gpu -or -not [bool]$metadata.benchmark.disable_vsync) { return $false }
@@ -123,6 +124,10 @@ function Test-RenderedRun {
     foreach ($row in $extended) { if ($row.frame_valid -ne '1' -or $row.termination_reason -ne 'none') { return $false } }
     foreach ($row in $presentation) {
         if ($row.rendered -ne '1' -or $row.gpu_sync_enabled -ne '1' -or $null -eq (Read-Double $row.frame_wall_ms)) { return $false }
+    }
+    if ($RequireQuality -and $RequireReference) {
+        $quality = @(Import-Csv -LiteralPath $qualityPath | Where-Object { [int]$_.frame -ge $Warmup })
+        if ($quality.Count -ne $Frames -or @($quality | Where-Object { $_.has_reference -eq '1' -and $_.finite -eq '1' -and $_.exploded -eq '0' }).Count -eq 0) { return $false }
     }
     return $true
 }

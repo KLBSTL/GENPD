@@ -41,6 +41,14 @@ $sceneMap = [ordered]@{
     'moving-sphere' = 'scenes\moving_sphere_cloth.xml'
 }
 $dimensions = @(256, 386)
+function Resolve-ReferenceCheckpointDirectory {
+    param([string]$Path)
+    $root = [System.IO.Path]::GetFullPath($Path)
+    foreach ($candidate in @((Join-Path $root 'reference_checkpoints'), $root)) {
+        if (Test-Path -LiteralPath (Join-Path $candidate 'reference_state_000000.bin')) { return $candidate }
+    }
+    throw "Reference checkpoints were not found below: $root"
+}
 $budgetRows = @(Import-Csv -LiteralPath $budgetPath)
 $cases = @()
 foreach ($sceneId in $sceneMap.Keys) {
@@ -50,8 +58,7 @@ foreach ($sceneId in $sceneMap.Keys) {
                 -and $_.solver_variant -eq 'gpu-gather-fusion-batched-ls-persistent' -and $_.qualified -eq '1'
         })
         if ($matches.Count -ne 1) { throw "Expected one qualified persistent calibration row for $sceneId d$dimension." }
-        $referenceDir = [System.IO.Path]::GetFullPath($matches[0].reference_dir)
-        if (-not (Test-Path -LiteralPath $referenceDir)) { throw "Missing quality reference for $sceneId d${dimension}: $referenceDir" }
+        $referenceDir = Resolve-ReferenceCheckpointDirectory -Path $matches[0].reference_dir
         $cases += [pscustomobject]@{
             scene_id = $sceneId
             scene_path = $sceneMap[$sceneId]
