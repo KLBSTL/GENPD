@@ -42,3 +42,12 @@ the CPU-NCG reference checkpoints for its chosen scene/resolution and pass
 them to `run_line_search_sweep.ps1 -RequireReference`. No formal R2 reference,
 calibration, performance, stability, material-matrix, or line-search sweep
 has been launched at this checkpoint.
+
+## Scene/Material Smoke Evidence
+
+`results/smoke-scene-material-rect` exercised the separate material matrix
+pipeline on a `512x128` rectangular cloth (65,536 vertices), hanging scene,
+stretch stiffness 80, and bending stiffness 20. It produced a rendered CPU
+reference, a quality comparison, and an untraced rendered timing run. Its two
+frames only validate the square/rectangle and metric plumbing; they are not
+formal material-matrix evidence.
