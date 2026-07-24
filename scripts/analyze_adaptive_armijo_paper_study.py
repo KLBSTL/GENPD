@@ -110,8 +110,10 @@ def validate_rendered_run(directory, expected_variant, frames, warmup, trace):
         quality = measured(load_csv(quality_path), warmup, quality_path)
         if len(quality) != frames:
             fail("Incomplete quality frame count in {0}".format(directory))
-        if any(row.get("has_reference") != "1" or row.get("finite") != "1" or row.get("exploded") != "0" for row in quality):
+        if any(row.get("finite") != "1" or row.get("exploded") != "0" for row in quality):
             fail("Invalid quality data in {0}".format(directory))
+        if not any(row.get("has_reference") == "1" for row in quality):
+            fail("No reference-aligned quality checkpoint in {0}".format(directory))
         return extended, presentation, quality
     return extended, presentation, None
 

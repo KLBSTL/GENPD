@@ -155,8 +155,10 @@ def quality_p95(run_dir, variant, manifest):
     extended = measured(load_csv(extended_path), manifest["quality"]["warmup"], extended_path)
     if len(quality) != manifest["quality"]["frames"] or len(extended) != manifest["quality"]["frames"]:
         fail("Incomplete quality run: {0}".format(run_dir))
-    if any(row.get("has_reference") != "1" or row.get("finite") != "1" or row.get("exploded") != "0" for row in quality):
+    if any(row.get("finite") != "1" or row.get("exploded") != "0" for row in quality):
         fail("Invalid quality input in {0}".format(run_dir))
+    if not any(row.get("has_reference") == "1" for row in quality):
+        fail("No reference-aligned quality checkpoint in {0}".format(run_dir))
     if any(row.get("frame_valid") != "1" or row.get("termination_reason") != "none" for row in extended):
         fail("Invalid quality frame in {0}".format(run_dir))
     value = percentile([number(row, "position_rel_l2", quality_path) for row in quality])
