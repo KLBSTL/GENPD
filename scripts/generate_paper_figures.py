@@ -368,9 +368,9 @@ def plot_scalability_quality(summary, validity, output_dir, paper_dir):
     axes[1][1].set_title('386$^2$ validity and quality gate')
     axes[1][1].set_yticks([0, 1])
     axes[1][1].set_yticklabels(['Hanging', 'Moving sphere'])
-    axes[1][1].set_xticks(x)
+    axes[1][1].set_xticks(list(range(len(VARIANTS))))
     axes[1][1].set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
-    axes[1][1].text(0.02, -0.45, 'Q: NCG P95 relative L2 <= 1e-3; XPBD uses strain/penetration gates.',
+    axes[1][1].text(0.02, -0.45, 'Q: NCG P95 relative L2 <= 1e-3; XPBD uses checkpoint strain and penetration gates.',
                     transform=axes[1][1].transAxes, ha='left', va='top', fontsize=6.5)
     save_figure(fig, 'scalability_quality', output_dir, paper_dir)
 
