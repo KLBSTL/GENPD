@@ -44,5 +44,8 @@ if ($manifest.calibration.candidate_iterations.Count -ne 13 -or
     $manifest.validity_policy.validity_matrix_schema -ne 'qualified-invalid-termination-reason') {
     throw 'Paper experiment manifest does not encode the R2 calibration and validity contract.'
 }
+if ($manifest.execution.process_timeout_seconds -ne 600 -or $manifest.execution.inter_run_delay_milliseconds -ne 1000) {
+    throw 'Paper experiment manifest does not encode the R2 execution protection contract.'
+}
 
 Write-Output "Paper experiment contract passed: $manifestPath"

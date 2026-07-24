@@ -7,7 +7,9 @@ param(
     [string]$Stage = 'all',
     [switch]$DryRun,
     [switch]$Force,
-    [switch]$ProfileGpuQueries
+    [switch]$ProfileGpuQueries,
+    [int]$ProcessTimeoutSeconds = 600,
+    [int]$InterRunDelayMilliseconds = 1000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,6 +23,7 @@ if ($RunRoot -eq '') {
     $RunRoot = Join-Path $ProjectRoot (Join-Path 'results' $RunLabel)
 }
 $RunRoot = [System.IO.Path]::GetFullPath($RunRoot)
+if ($ProcessTimeoutSeconds -lt 1 -or $InterRunDelayMilliseconds -lt 0) { throw 'Timeout and inter-run delay values are invalid.' }
 
 $benchmarkScript = Join-Path $scriptDir 'run_benchmark.ps1'
 $referenceScript = Join-Path $scriptDir 'run_reference.ps1'
@@ -152,6 +155,10 @@ function Write-Manifest {
             disable_vsync = $true
             screenshot_readback_during_timing = $false
         }
+        execution = [ordered]@{
+            process_timeout_seconds = $ProcessTimeoutSeconds
+            inter_run_delay_milliseconds = $InterRunDelayMilliseconds
+        }
         stability = [ordered]@{
             solver_variant = 'gpu-gather-fusion-batched-ls-persistent'
             cloth_dimension = 256
@@ -276,7 +283,9 @@ function Invoke-Reference {
     & $referenceScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-reference-$caseId") `
         -Frames $qualityFrames -Warmup $qualityWarmup -ReferenceIterations 100 -CheckpointStride $qualityCheckpointStride `
         -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight `
+        -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
         -ExtraArgs (Get-CaseExtraArgs -ClothDimension $ClothDimension -ScenePath $Scene.path)
+    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
     if (-not (Test-RunComplete -OutputDir $outputDir -Frames $qualityFrames -Warmup $qualityWarmup -RequireQuality -RequirePresentation)) {
         throw "Reference run is incomplete or invalid: $outputDir"
     }
@@ -352,7 +361,9 @@ function Invoke-Calibration {
                             -Frames $qualityFrames -Warmup $qualityWarmup -SolverVariant $variant -IterationsPerFrame $budget `
                             -QualityReferenceDir $checkpointDir -QualityCheckpointStride $qualityCheckpointStride `
                             -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight `
+                            -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
                             -ExtraArgs (Get-CaseExtraArgs -ClothDimension $dimension -ScenePath $scene.path)
+                        if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
                     }
                     $metrics = Get-QualitySummary -OutputDir $outputDir
                     $isXPBD = $variant -eq 'gpu-xpbd-jacobi'
@@ -450,7 +461,9 @@ function Invoke-Performance {
                 -Frames $performanceFrames -Warmup $performanceWarmup -SolverVariant $row.solver_variant `
                 -IterationsPerFrame ([int]$row.iterations_per_frame) -OutputDir $outputDir `
                 -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -ProfileGpuQueries:$ProfileGpuQueries `
+                -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
                 -ExtraArgs (Get-CaseExtraArgs -ClothDimension ([int]$row.cloth_dimension) -ScenePath $row.scene_path)
+            if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
             if (-not (Test-RunComplete -OutputDir $outputDir -Frames $performanceFrames -Warmup $performanceWarmup -RequirePresentation)) {
                 throw "Performance run is incomplete or invalid: $outputDir"
             }
@@ -479,7 +492,9 @@ function Invoke-Stability {
                     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel ("$RunLabel-stability-$caseId") `
                         -Frames $performanceFrames -Warmup $performanceWarmup -SolverVariant 'gpu-gather-fusion-batched-ls-persistent' `
                         -IterationsPerFrame $iterationsPerFrame -OutputDir $outputDir -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth $renderWidth -RenderHeight $renderHeight -QualityMetrics `
+                        -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
                         -ExtraArgs (Get-CaseExtraArgs -ClothDimension 256 -ScenePath 'scenes\moving_sphere_cloth.xml' -Timestep $dt -Stretch $stretch -Bending 20.0)
+                    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
                 }
                 $profileRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })
                 $extendedRows = @(Import-Csv -LiteralPath (Join-Path $outputDir 'frame_profile_extended.csv') | Where-Object { [int]$_.frame -ge $performanceWarmup })
@@ -536,7 +551,9 @@ function Invoke-Captures {
                 -Frames ($captureFrame + 1) -Warmup 0 -SolverVariant 'gpu-gather-fusion-batched-ls-persistent' `
                 -IterationsPerFrame $iterations -OutputDir $outputDir -NoRender:$false -Uncapped:$true `
                 -CaptureFrame $captureFrame -CaptureOutput $capturePath -CaptureWidth 1600 -CaptureHeight 900 `
+                -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
                 -ExtraArgs (Get-CaseExtraArgs -ClothDimension $dimension -ScenePath $scene.path)
+            if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
             if (-not (Test-Path -LiteralPath $capturePath)) { throw "Screenshot was not produced: $capturePath" }
         }
     }
