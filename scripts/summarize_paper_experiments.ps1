@@ -10,7 +10,7 @@ $invariant = [System.Globalization.CultureInfo]::InvariantCulture
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $PSCommandPath }
 if ($ProjectRoot -eq '') { $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir '..')) }
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
-if ($RunRoot -eq '') { $RunRoot = Join-Path $ProjectRoot 'results\paper-20260723' }
+if ($RunRoot -eq '') { $RunRoot = Join-Path $ProjectRoot 'results\paper-20260724-r2' }
 $RunRoot = [System.IO.Path]::GetFullPath($RunRoot)
 $manifestPath = Join-Path $RunRoot 'manifest.json'
 $selectedPath = Join-Path $RunRoot 'selected_budgets.csv'
@@ -19,7 +19,10 @@ if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Missing manifest: $man
 if (-not (Test-Path -LiteralPath $selectedPath)) { throw "Missing selected equal-quality budgets: $selectedPath" }
 if (-not (Test-Path -LiteralPath $validityPath)) { throw "Missing explicit validity matrix: $validityPath" }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([int]$manifest.protocol_version -ne 2) { throw 'Formal R2 summary requires protocol version 2.' }
+if ([int]$manifest.protocol_version -ne 3) { throw 'Formal R2 summary requires protocol version 3.' }
+if (-not [bool]$manifest.scope.complete_matrix -or -not [bool]$manifest.scope.paper_figure_eligible) {
+    throw 'Formal R2 summary requires a complete, figure-eligible matrix.'
+}
 if ([int]$manifest.performance.repetitions -ne 3) { throw 'Formal performance protocol requires exactly three repetitions.' }
 if ([double]$manifest.quality_target.position_rel_l2_p95 -ne 0.001) { throw 'Unexpected equal-quality threshold in manifest.' }
 if ($manifest.measurement.mode -ne 'rendered-end-to-end' -or $manifest.measurement.primary_metric -ne 'frame_wall_ms') {
