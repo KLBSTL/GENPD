@@ -168,8 +168,10 @@ try {
         $process.WaitForExit()
         $process.Refresh()
         $exitCode = $process.ExitCode
-        Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Write-Host
-        Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue | Write-Host
+        # Preserve complete child logs on disk, but keep a long paper matrix
+        # readable in the terminal.
+        Get-Content -LiteralPath $logPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
+        Get-Content -LiteralPath $stderrPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
         if ($null -eq $exitCode) {
             $requiredArtifacts = @('frame_profile.csv', 'frame_profile_experiment.csv', 'frame_presentation.csv', 'run_metadata.json') |
                 ForEach-Object { Join-Path $OutputDir $_ }
