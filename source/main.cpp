@@ -139,6 +139,7 @@ int g_cli_cloth_width = 0;
 int g_cli_cloth_height = 0;
 int g_cli_batched_ls_k = 0;
 ScalarType g_cli_armijo_beta = static_cast<ScalarType>(-1);
+std::string g_cli_adaptive_ls_history = "frame";
 std::string g_cli_ncg_restart_mode;
 int g_cli_ncg_restart_period = 0;
 std::string g_cli_verify_cs_gradient_dir;
@@ -306,6 +307,21 @@ if (g_cli_armijo_beta > 0)
     }
     g_simulation->SetArmijoBeta(g_cli_armijo_beta);
 }
+AdaptiveLineSearchHistoryMode adaptive_history_mode = ADAPTIVE_LS_HISTORY_FRAME;
+if (g_cli_adaptive_ls_history == "none")
+{
+    adaptive_history_mode = ADAPTIVE_LS_HISTORY_NONE;
+}
+else if (g_cli_adaptive_ls_history == "iteration")
+{
+    adaptive_history_mode = ADAPTIVE_LS_HISTORY_ITERATION;
+}
+else if (g_cli_adaptive_ls_history != "frame")
+{
+    std::cerr << "Unknown --adaptive-ls-history: " << g_cli_adaptive_ls_history << std::endl;
+    exit(EXIT_FAILURE);
+}
+g_simulation->SetAdaptiveLineSearchHistoryMode(adaptive_history_mode);
 if (!g_cli_ncg_restart_mode.empty())
 {
     NCGRestartMode restart_mode = NCG_RESTART_NONE;
@@ -357,6 +373,7 @@ const std::string cloth_width_metadata = g_cli_cloth_width > 0 ? std::to_string(
 const std::string cloth_height_metadata = g_cli_cloth_height > 0 ? std::to_string(g_cli_cloth_height) : std::string();
 const std::string batched_ls_k_metadata = g_cli_batched_ls_k > 0 ? std::to_string(g_cli_batched_ls_k) : std::string();
 const std::string armijo_beta_metadata = g_cli_armijo_beta > 0 ? std::to_string(g_cli_armijo_beta) : std::string();
+const std::string adaptive_ls_history_metadata = g_cli_adaptive_ls_history;
 const std::string ncg_restart_period_metadata = g_cli_ncg_restart_period > 0 ? std::to_string(g_cli_ncg_restart_period) : std::string();
 const bool quality_metrics_enabled = g_cli_quality_metrics || !reference_export_dir.empty() || !quality_reference_dir.empty();
 _putenv_s("GENPD_ITERATIONS_PER_FRAME", iterations_per_frame_metadata.c_str());
@@ -372,6 +389,7 @@ _putenv_s("GENPD_CLOTH_WIDTH_OVERRIDE", cloth_width_metadata.c_str());
 _putenv_s("GENPD_CLOTH_HEIGHT_OVERRIDE", cloth_height_metadata.c_str());
 _putenv_s("GENPD_BATCHED_LS_K", batched_ls_k_metadata.c_str());
 _putenv_s("GENPD_ARMIJO_BETA", armijo_beta_metadata.c_str());
+_putenv_s("GENPD_ADAPTIVE_LS_HISTORY", adaptive_ls_history_metadata.c_str());
 _putenv_s("GENPD_NCG_RESTART_MODE", g_cli_ncg_restart_mode.c_str());
 _putenv_s("GENPD_NCG_RESTART_PERIOD", ncg_restart_period_metadata.c_str());
 _putenv_s("GENPD_SCENE", selected_scene.c_str());
@@ -1046,6 +1064,10 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_armijo_beta = parse_positive_scalar(argv[++i], g_cli_armijo_beta);
         }
+        else if (arg == "--adaptive-ls-history" && i + 1 < argc)
+        {
+            g_cli_adaptive_ls_history = argv[++i];
+        }
         else if (arg == "--ncg-restart-mode" && i + 1 < argc)
         {
             g_cli_ncg_restart_mode = argv[++i];
@@ -1137,6 +1159,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --cloth-height N            Override cloth grid height.\n"
                 << "  --batched-ls-k N            Set batched Armijo candidate count.\n"
                 << "  --armijo-beta FLOAT         Set Armijo backtracking factor in (0,1).\n"
+                << "  --adaptive-ls-history MODE  none | iteration | frame (default frame).\n"
                 << "  --ncg-restart-mode MODE     none | periodic | non-descent.\n"
                 << "  --ncg-restart-period N      Period for periodic NCG restart.\n"
                 << "  --verify-cs-gradient PATH  Export CPU/edge/gather gradient diagnostics and exit.\n"

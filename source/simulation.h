@@ -108,6 +108,12 @@ typedef enum
 	NCG_RESTART_NON_DESCENT = 2
 } NCGRestartMode;
 
+typedef enum
+{
+	ADAPTIVE_LS_HISTORY_NONE,
+	ADAPTIVE_LS_HISTORY_ITERATION,
+	ADAPTIVE_LS_HISTORY_FRAME
+} AdaptiveLineSearchHistoryMode;
 
 struct alignas(16) ParamsUBO {
 	float t0;  // 0
@@ -242,18 +248,14 @@ void ConfigureQualityMetrics(const std::string& reference_export_dir, const std:
 	inline void SetScene(Scene* scene) { m_scene = scene; }
 	inline void SetStepMode(bool step_mode) { m_step_mode = step_mode; }
 	inline ScalarType Timestep() { return m_h; }
-	inline void SetTimestep(ScalarType timestep) { if (timestep > 0) { m_h = timestep; } }
-	inline void SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending)
-	{
-		if (stretch > 0) { m_stiffness_stretch = stretch; }
-		if (bending > 0) { m_stiffness_bending = bending; }
-		if (m_stiffness_auto_laplacian_stiffness) { m_stiffness_laplacian = 2 * m_stiffness_stretch + m_stiffness_bending; }
-	}
+	void SetTimestep(ScalarType timestep);
+	void SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending);
 inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
 inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
 	bool VerifyCSGradient(const std::string& output_dir);
 	void SetBatchedLineSearchK(unsigned int candidate_count);
 	void SetArmijoBeta(ScalarType beta);
+	void SetAdaptiveLineSearchHistoryMode(AdaptiveLineSearchHistoryMode mode);
 	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
 	void SetProfileLineSearchDecisions(bool enabled);
 	void SetForceCS2CpuStateRoundtrip(bool enabled);
@@ -351,6 +353,8 @@ protected:
 	ScalarType m_ls_beta;
 	ScalarType m_ls_step_size;
 	unsigned int m_batched_ls_k;
+	AdaptiveLineSearchHistoryMode m_adaptive_ls_history_mode;
+	bool m_adaptive_ls_was_active;
 	NCGRestartMode m_ncg_restart_mode;
 	unsigned int m_ncg_restart_period;
 	// prefetched instructions in linesearch

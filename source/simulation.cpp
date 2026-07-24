@@ -677,6 +677,8 @@ m_quality_checkpoint_stride = 1;
 	m_cs_gradient_dot_descent = 0.0;
 	m_cs_ncg_restart_count = 0;
 	m_batched_ls_k = 8u;
+	m_adaptive_ls_history_mode = ADAPTIVE_LS_HISTORY_FRAME;
+	m_adaptive_ls_was_active = false;
 	m_ncg_restart_mode = NCG_RESTART_NON_DESCENT;
 	m_ncg_restart_period = 0u;
 	m_cs_edge_buffer_dirty = true;
@@ -2026,6 +2028,11 @@ void Simulation::ensureAdaptiveLineSearchState()
 
 void Simulation::resetAdaptiveLineSearchState()
 {
+	if (!use_cs)
+	{
+		return;
+	}
+	++m_cs_adaptive_ls_history_generation;
 	ensureAdaptiveLineSearchState();
 	if (adaptive_ls_reset_program == 0 || adaptiveLineSearchStateID == 0)
 	{
@@ -2398,6 +2405,54 @@ void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir
         m_reference_export_dir.clear();
         m_quality_metrics_enabled = enable_quality_metrics || !m_quality_reference_dir.empty();
     }
+}
+
+void Simulation::SetTimestep(ScalarType timestep)
+{
+	if (timestep <= 0.0 || timestep == m_h)
+	{
+		return;
+	}
+	m_h = timestep;
+	if (use_cs && m_mesh)
+	{
+		syncCSParams();
+		resetAdaptiveLineSearchState();
+	}
+}
+
+void Simulation::SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending)
+{
+	bool changed = false;
+	if (stretch > 0.0 && stretch != m_stiffness_stretch)
+	{
+		m_stiffness_stretch = stretch;
+		changed = true;
+	}
+	if (bending > 0.0 && bending != m_stiffness_bending)
+	{
+		m_stiffness_bending = bending;
+		changed = true;
+	}
+	if (m_stiffness_auto_laplacian_stiffness)
+	{
+		m_stiffness_laplacian = 2 * m_stiffness_stretch + m_stiffness_bending;
+	}
+	if (changed && use_cs && m_mesh)
+	{
+		syncCSParams();
+		resetAdaptiveLineSearchState();
+	}
+}
+
+void Simulation::SetAdaptiveLineSearchHistoryMode(AdaptiveLineSearchHistoryMode mode)
+{
+	if (m_adaptive_ls_history_mode == mode)
+	{
+		return;
+	}
+	m_adaptive_ls_history_mode = mode;
+	resetAdaptiveLineSearchState();
 }
 
 void Simulation::SetBatchedLineSearchK(unsigned int candidate_count)
@@ -4120,6 +4175,13 @@ void Simulation::integrateImplicitMethod()
 	m_last_profile_termination_reason = "none";
 	m_last_profile_ncg_restarts = 0;
 	m_cs_ncg_restart_count = 0;
+	const bool adaptive_line_search_active = use_cs_ncg && GenPDExperimentUsesAdaptiveLineSearch();
+	if ((m_adaptive_ls_was_active && !adaptive_line_search_active)
+		|| (adaptive_line_search_active && (m_adaptive_ls_history_mode == ADAPTIVE_LS_HISTORY_ITERATION || m_cs_edge_buffer_dirty)))
+	{
+		resetAdaptiveLineSearchState();
+	}
+	m_adaptive_ls_was_active = adaptive_line_search_active;
 	// take a initial guess
 	VectorX x = m_y;
 	//VectorX x = m_mesh->m_current_positions;
@@ -4476,6 +4538,10 @@ void Simulation::integrateImplicitMethod()
 		m_last_profile_termination_reason = (!x_is_finite || !cs_stats_finite)
 			? "nonfinite"
 			: "max_position";
+		if (adaptive_line_search_active)
+		{
+			resetAdaptiveLineSearchState();
+		}
 		g_cs_unit_step_shortcut_budget = 0;
 		g_cs_prefetched_energy_valid = false;
 		x = m_mesh->m_current_positions;
@@ -6517,6 +6583,10 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 
 	if (gpu_resident_line_search && GenPDExperimentUsesAdaptiveLineSearch())
 {
+    if (m_adaptive_ls_history_mode == ADAPTIVE_LS_HISTORY_NONE)
+    {
+        resetAdaptiveLineSearchState();
+    }
     const GLuint candidate_count = std::max(1u, m_batched_ls_k);
     const GLuint partial_group_count = std::max(inertia_partial_group_count, energy_partial_group_count);
     EnsureFloatScratchBuffer(testID, test_, static_cast<std::size_t>(candidate_count) * partial_group_count);

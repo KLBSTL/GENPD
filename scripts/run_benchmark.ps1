@@ -13,6 +13,8 @@ param(
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
+    [ValidateSet('none', 'iteration', 'frame')]
+    [string]$AdaptiveLsHistory = 'frame',
     [switch]$ForceCpuStateRoundtrip,
     [switch]$SyncGpu,
     [switch]$DisableVsync,
@@ -127,6 +129,7 @@ $appArgs = @(
     '--output-dir', $OutputDir,
     '--run-label', $RunLabel,
     '--solver-variant', $SolverVariant,
+    '--adaptive-ls-history', $AdaptiveLsHistory,
     '--frames', $Frames,
     '--warmup', $Warmup
 )
