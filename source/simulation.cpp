@@ -6515,7 +6515,157 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		gpu_line_search_mode_location = glGetUniformLocation(energy_for_linesearch_program, "gpu_line_search_mode");
 	}
 
-	if (gpu_resident_line_search)
+	if (gpu_resident_line_search && GenPDExperimentUsesAdaptiveLineSearch())
+{
+    const GLuint candidate_count = std::max(1u, m_batched_ls_k);
+    const GLuint partial_group_count = std::max(inertia_partial_group_count, energy_partial_group_count);
+    EnsureFloatScratchBuffer(testID, test_, static_cast<std::size_t>(candidate_count) * partial_group_count);
+    EnsureCSBufferStorage(energyID, static_cast<std::size_t>(candidate_count + 1u) * sizeof(ScalarType), g_cs_energy_buffer_bytes);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, FlagID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, ResultID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
+    ensureAdaptiveLineSearchState();
+
+    ++g_cs_profile_full_linesearch_calls;
+
+    static GLint include_current_candidate_location = -1;
+    static GLint gpu_line_search_mode_location = -1;
+    if (include_current_candidate_location < 0)
+    {
+        include_current_candidate_location = glGetUniformLocation(energy_for_linesearch_program, "include_current_candidate");
+        gpu_line_search_mode_location = glGetUniformLocation(energy_for_linesearch_program, "gpu_line_search_mode");
+    }
+
+    static GLint final_current_energy_location = -1;
+    static GLint final_gradient_dot_location = -1;
+    static GLint final_state_location = -1;
+    static GLint final_control_mode_location = -1;
+    static GLint final_keep_accept_location = -1;
+    static GLint final_write_fallback_location = -1;
+    static GLint final_dispatch_group_location = -1;
+    static GLint final_dispatch_partial_location = -1;
+    static GLint final_shortcut_budget_location = -1;
+    static GLint final_candidate_count_location = -1;
+    static GLint final_first_step_location = -1;
+    static GLint final_adaptive_history_location = -1;
+    static GLint final_adaptive_batch_location = -1;
+    if (final_current_energy_location < 0)
+    {
+        final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
+        final_gradient_dot_location = glGetUniformLocation(choose_final_program, "grad_dot_d");
+        final_state_location = glGetUniformLocation(choose_final_program, "use_gpu_line_search_state");
+        final_control_mode_location = glGetUniformLocation(choose_final_program, "control_mode");
+        final_keep_accept_location = glGetUniformLocation(choose_final_program, "keep_existing_accept");
+        final_write_fallback_location = glGetUniformLocation(choose_final_program, "write_fallback_dispatch");
+        final_dispatch_group_location = glGetUniformLocation(choose_final_program, "dispatch_group_count");
+        final_dispatch_partial_location = glGetUniformLocation(choose_final_program, "dispatch_partial_count");
+        final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
+        final_candidate_count_location = glGetUniformLocation(choose_final_program, "gpu_candidate_count");
+        final_first_step_location = glGetUniformLocation(choose_final_program, "gpu_first_step");
+        final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+        final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
+    }
+
+    auto configure_adaptive_choose_final = [&](int final_batch, int keep_existing_accept, int write_fallback_dispatch)
+    {
+        glUseProgram(choose_final_program);
+        glUniform1f(final_current_energy_location, 0.0f);
+        glUniform1f(final_gradient_dot_location, 0.0f);
+        glUniform1i(final_state_location, 1);
+        glUniform1i(final_control_mode_location, 0);
+        glUniform1i(final_keep_accept_location, keep_existing_accept);
+        glUniform1i(final_write_fallback_location, write_fallback_dispatch);
+        glUniform1ui(final_dispatch_group_location, candidate_count);
+        glUniform1ui(final_dispatch_partial_location, partial_group_count);
+        glUniform1ui(final_shortcut_budget_location, 0u);
+        glUniform1i(final_candidate_count_location, static_cast<GLint>(candidate_count));
+        glUniform1f(final_first_step_location, 1.0f);
+        glUniform1i(final_adaptive_history_location, 1);
+        glUniform1i(final_adaptive_batch_location, final_batch);
+    };
+
+    // Base energy is evaluated once; both adaptive batches reuse energy[0].
+    comp_params.t0 = 0.0f;
+    comp_params.K = 1;
+    glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(include_current_candidate_location, 0);
+    glUniform1i(gpu_line_search_mode_location, 0);
+    glDispatchCompute(1, partial_group_count, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReduction(compute_program, testID, energyID, partial_group_count, 1u, false, false, 0u);
+
+    comp_params.t0 = 1.0f;
+    comp_params.K = base_K;
+    glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(include_current_candidate_location, 0);
+    glUniform1i(gpu_line_search_mode_location, 3);
+    glDispatchCompute(candidate_count, partial_group_count, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReduction(compute_program, testID, energyID, partial_group_count, candidate_count, false, false, 1u);
+
+    configure_adaptive_choose_final(0, 0, 1);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(include_current_candidate_location, 0);
+    glUniform1i(gpu_line_search_mode_location, 3);
+    glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, FlagID);
+    glDispatchComputeIndirect(0);
+    glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReductionIndirect(compute_program, testID, energyID, partial_group_count, candidate_count, 1u, FlagID, static_cast<GLintptr>(4u * sizeof(GLuint)));
+
+    configure_adaptive_choose_final(1, 1, 0);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    if (m_profile_line_search_decisions)
+    {
+        CSLineSearchResultGPU decision = {};
+        if (!ReadCSLineSearchResult(ResultID, decision))
+        {
+            throw std::runtime_error("Adaptive Armijo decision readback was non-finite.");
+        }
+        if (decision.accepted != 0)
+        {
+            ScalarType base_energy = 0.0;
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(base_energy), &base_energy);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+            ++g_cs_profile_host_readbacks;
+            const ScalarType armijo_rhs = base_energy + m_ls_alpha * static_cast<ScalarType>(decision.step) * m_cs_gradient_dot_descent;
+            const ScalarType tolerance = static_cast<ScalarType>(1e-6) * std::max<ScalarType>(1.0, std::abs(base_energy));
+            if (!std::isfinite(base_energy) || decision.accepted_energy > armijo_rhs + tolerance)
+            {
+                throw std::runtime_error("Adaptive GPU Armijo validation failed.");
+            }
+            ++g_cs_profile_accepted_candidate_count;
+        }
+        else
+        {
+            ++g_cs_profile_armijo_failures;
+        }
+    }
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(include_current_candidate_location, 0);
+    glUniform1i(gpu_line_search_mode_location, 0);
+    g_cs_unit_step_shortcut_budget = 0;
+    g_cs_prefetched_energy_valid = false;
+    m_ls_step_size = 1.0f;
+    return m_ls_step_size;
+}
+
+if (gpu_resident_line_search)
 	{
 		const unsigned int accepted_shortcut_budget =
 			(m_mesh && m_mesh->m_vertices_number >= kCSLargeClothVertexThreshold)
@@ -6546,6 +6696,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		static GLint gpu_final_shortcut_budget_location = -1;
 		static GLint gpu_final_candidate_count_location = -1;
 		static GLint gpu_final_first_step_location = -1;
+		static GLint gpu_final_adaptive_history_location = -1;
+		static GLint gpu_final_adaptive_batch_location = -1;
 		if (gpu_final_current_energy_location < 0)
 		{
 			gpu_final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
@@ -6559,6 +6711,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 			gpu_final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
 			gpu_final_candidate_count_location = glGetUniformLocation(choose_final_program, "gpu_candidate_count");
 			gpu_final_first_step_location = glGetUniformLocation(choose_final_program, "gpu_first_step");
+			gpu_final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+			gpu_final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
 		}
 
 		auto configure_choose_final = [&](int control_mode, int keep_existing_accept, int write_fallback_dispatch, GLuint dispatch_group_count, GLuint dispatch_partial_count, GLuint shortcut_budget_on_accept, int candidate_count, float first_step)
@@ -6575,6 +6729,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 			glUniform1ui(gpu_final_shortcut_budget_location, shortcut_budget_on_accept);
 			glUniform1i(gpu_final_candidate_count_location, candidate_count);
 			glUniform1f(gpu_final_first_step_location, first_step);
+			glUniform1i(gpu_final_adaptive_history_location, 0);
+			glUniform1i(gpu_final_adaptive_batch_location, 0);
 		};
 
 		configure_choose_final(1, 0, 0, unit_output_count, max_partial_group_count, 0u, 0, 1.0f);
@@ -6724,6 +6880,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	static GLint final_dispatch_group_location = -1;
 	static GLint final_dispatch_partial_location = -1;
 	static GLint final_shortcut_budget_location = -1;
+	static GLint final_adaptive_history_location = -1;
+	static GLint final_adaptive_batch_location = -1;
 	if (final_current_energy_location < 0)
 	{
 		final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
@@ -6735,6 +6893,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		final_dispatch_group_location = glGetUniformLocation(choose_final_program, "dispatch_group_count");
 		final_dispatch_partial_location = glGetUniformLocation(choose_final_program, "dispatch_partial_count");
 		final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
+		final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+		final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
 	}
 	glUniform1f(final_current_energy_location, static_cast<float>(current_objective_value));
 	glUniform1f(final_gradient_dot_location, static_cast<float>(m_cs_gradient_dot_descent));
@@ -6745,6 +6905,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	glUniform1ui(final_dispatch_group_location, 0u);
 	glUniform1ui(final_dispatch_partial_location, 1u);
 	glUniform1ui(final_shortcut_budget_location, 0u);
+	glUniform1i(final_adaptive_history_location, 0);
+	glUniform1i(final_adaptive_batch_location, 0);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	if (m_profile_line_search_decisions)

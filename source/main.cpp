@@ -289,6 +289,10 @@ int main(int argc, char ** argv)
 		std::cerr << "Warning: cannot set solver-variant metadata environment." << std::endl;
 	}
 std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
+if (GenPDExperimentUsesAdaptiveLineSearch() && g_cli_batched_ls_k == 0)
+{
+    g_simulation->SetBatchedLineSearchK(4u);
+}
 if (g_cli_batched_ls_k > 0)
 {
     g_simulation->SetBatchedLineSearchK(static_cast<unsigned int>(g_cli_batched_ls_k));
