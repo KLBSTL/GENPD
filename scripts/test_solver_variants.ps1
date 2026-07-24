@@ -34,6 +34,7 @@ if ($helpText -notmatch '--solver-variant') {
     'gpu-gather-fusion',
     'gpu-gather-fusion-batched-ls',
     'gpu-gather-fusion-batched-ls-persistent',
+    'gpu-gather-fusion-adaptive-ls-persistent',
     'gpu-xpbd-jacobi'
 ) | ForEach-Object {
     if ($helpText -notmatch [regex]::Escape($_)) {

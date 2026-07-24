@@ -11,6 +11,7 @@ enum GenPDExperimentVariant
 	GENPD_VARIANT_GPU_GATHER_FUSION,
 	GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS,
 	GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT,
+	GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT,
 	GENPD_VARIANT_GPU_XPBD_JACOBI
 };
 
@@ -23,6 +24,7 @@ bool GenPDExperimentUsesCSNCG();
 bool GenPDExperimentUsesEdgeScatter();
 bool GenPDExperimentUsesFusedGradientStats();
 bool GenPDExperimentUsesBatchedLineSearch();
+bool GenPDExperimentUsesAdaptiveLineSearch();
 bool GenPDExperimentUsesPersistentBuffers();
 bool GenPDExperimentUsesGPUXPBD();
 

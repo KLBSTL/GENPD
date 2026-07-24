@@ -31,6 +31,10 @@ bool GenPDParseExperimentVariant(const std::string& value, GenPDExperimentVarian
 	{
 		variant = GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT;
 	}
+	else if (value == "gpu-gather-fusion-adaptive-ls-persistent")
+	{
+		variant = GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
+	}
 	else if (value == "gpu-xpbd-jacobi")
 	{
 		variant = GENPD_VARIANT_GPU_XPBD_JACOBI;
@@ -67,6 +71,8 @@ const char* GenPDExperimentVariantName()
 		return "gpu-gather-fusion";
 	case GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS:
 		return "gpu-gather-fusion-batched-ls";
+	case GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT:
+		return "gpu-gather-fusion-adaptive-ls-persistent";
 	case GENPD_VARIANT_GPU_XPBD_JACOBI:
 		return "gpu-xpbd-jacobi";
 	case GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT:
@@ -90,18 +96,26 @@ bool GenPDExperimentUsesFusedGradientStats()
 {
 	return g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION
 		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS
-		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT;
+		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT
+		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
 }
 
 bool GenPDExperimentUsesBatchedLineSearch()
 {
 	return g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS
-		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT;
+		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT
+		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
+}
+
+bool GenPDExperimentUsesAdaptiveLineSearch()
+{
+	return g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
 }
 
 bool GenPDExperimentUsesPersistentBuffers()
 {
-	return g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT;
+	return g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT
+		|| g_experiment_variant == GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
 }
 
 bool GenPDExperimentUsesGPUXPBD()
