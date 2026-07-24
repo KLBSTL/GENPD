@@ -14,6 +14,8 @@ param(
     [int]$TimingWarmup = 30,
     [int]$TimingRepetitions = 3,
     [int]$IterationsPerFrame = 16,
+    [int]$ProcessTimeoutSeconds = 300,
+    [int]$InterRunDelayMilliseconds = 1000,
     [string[]]$SolverVariants = @('gpu-gather-fusion-batched-ls-persistent'),
     [string[]]$SceneIds = @(),
     [string[]]$MeshIds = @(),
@@ -35,6 +37,7 @@ $referenceScript = Join-Path $scriptDir 'run_reference.ps1'
 
 foreach ($tool in @($benchmarkScript, $referenceScript)) { if (-not (Test-Path -LiteralPath $tool)) { throw "Missing tool: $tool" } }
 if ($TimingRepetitions -lt 1 -or $ReferenceIterations -lt 1 -or $IterationsPerFrame -lt 1) { throw 'Iteration/repetition values must be positive.' }
+if ($ProcessTimeoutSeconds -lt 1 -or $InterRunDelayMilliseconds -lt 0) { throw 'Timeout and inter-run delay values are invalid.' }
 
 $scenes = @(
     [ordered]@{ id = 'hanging'; path = 'scenes\test_scene.xml' },
@@ -76,6 +79,13 @@ function Read-Double {
     return $parsed
 }
 function Get-Mean { param([double[]]$Values) if ($Values.Count -eq 0) { return $null }; return [double](($Values | Measure-Object -Average).Average) }
+function Get-Std {
+    param([double[]]$Values)
+    if ($Values.Count -lt 2) { return 0.0 }
+    $mean = Get-Mean $Values; $sumSquares = 0.0
+    foreach ($value in $Values) { $sumSquares += ($value - $mean) * ($value - $mean) }
+    return [math]::Sqrt($sumSquares / [double]($Values.Count - 1))
+}
 function Get-Percentile {
     param([double[]]$Values, [double]$Quantile)
     if ($Values.Count -eq 0) { return $null }
@@ -117,7 +127,9 @@ function Invoke-ReferenceCase {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     & $referenceScript -ProjectRoot $ProjectRoot -RunLabel "$RunLabel-reference-$caseId" -Frames $ReferenceFrames -Warmup $ReferenceWarmup `
         -ReferenceIterations $ReferenceIterations -CheckpointStride 1 -OutputDir $directory -NoRender:$false -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth 1600 -RenderHeight 900 `
+        -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
         -ExtraArgs (Get-ExtraArgs -Scene $Scene -Mesh $Mesh -Stretch $Stretch -Bending $Bending) | Out-Host
+    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
     if (-not (Test-RunArtifacts -Directory $directory -Frames $ReferenceFrames -Warmup $ReferenceWarmup -RequireQuality -RequireReference)) { throw "Incomplete reference run: $directory" }
     return $directory
 }
@@ -131,7 +143,9 @@ function Invoke-QualityCase {
     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel "$RunLabel-quality-$Variant-$caseId" -Frames $QualityFrames -Warmup $QualityWarmup `
         -SolverVariant $Variant -IterationsPerFrame $IterationsPerFrame -QualityMetrics -QualityReferenceDir (Join-Path $ReferenceDir 'reference_checkpoints') `
         -QualityCheckpointStride 1 -OutputDir $directory -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth 1600 -RenderHeight 900 `
+        -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
         -ExtraArgs (Get-ExtraArgs -Scene $Scene -Mesh $Mesh -Stretch $Stretch -Bending $Bending) | Out-Host
+    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
     if (-not (Test-RunArtifacts -Directory $directory -Frames $QualityFrames -Warmup $QualityWarmup -RequireQuality)) { throw "Incomplete quality run: $directory" }
     return $directory
 }
@@ -144,7 +158,9 @@ function Invoke-TimingCase {
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel "$RunLabel-timing-$Variant-$caseId-rep$Repetition" -Frames $TimingFrames -Warmup $TimingWarmup `
         -SolverVariant $Variant -IterationsPerFrame $IterationsPerFrame -OutputDir $directory -Uncapped:$true -SyncGpu -DisableVsync -RenderWidth 1600 -RenderHeight 900 `
+        -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
         -ExtraArgs (Get-ExtraArgs -Scene $Scene -Mesh $Mesh -Stretch $Stretch -Bending $Bending) | Out-Host
+    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
     if (-not (Test-RunArtifacts -Directory $directory -Frames $TimingFrames -Warmup $TimingWarmup)) { throw "Incomplete timing run: $directory" }
     return $directory
 }
@@ -153,10 +169,19 @@ function Summarize-Case {
     $quality = @(Import-Csv -LiteralPath (Join-Path $QualityDir 'quality_metrics.csv') | Where-Object { [int]$_.frame -ge $QualityWarmup })
     $qualityExt = @(Import-Csv -LiteralPath (Join-Path $QualityDir 'frame_profile_extended.csv') | Where-Object { [int]$_.frame -ge $QualityWarmup })
     $timingRows = @(); $experimentRows = @(); $presentationRows = @()
+    $frameMeans = @(); $totalMeans = @(); $optimizationMeans = @(); $transferMeans = @(); $dispatchMeans = @(); $readbackMeans = @(); $bufferMeans = @()
     foreach ($directory in $TimingDirs) {
-        $timingRows += @(Import-Csv -LiteralPath (Join-Path $directory 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
-        $experimentRows += @(Import-Csv -LiteralPath (Join-Path $directory 'frame_profile_experiment.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
-        $presentationRows += @(Import-Csv -LiteralPath (Join-Path $directory 'frame_presentation.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $timingRun = @(Import-Csv -LiteralPath (Join-Path $directory 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $experimentRun = @(Import-Csv -LiteralPath (Join-Path $directory 'frame_profile_experiment.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $presentationRun = @(Import-Csv -LiteralPath (Join-Path $directory 'frame_presentation.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $timingRows += $timingRun; $experimentRows += $experimentRun; $presentationRows += $presentationRun
+        $frameMeans += Get-Mean @($presentationRun | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ })
+        $totalMeans += Get-Mean @($timingRun | ForEach-Object { Read-Double $_.total_ms } | Where-Object { $null -ne $_ })
+        $optimizationMeans += Get-Mean @($timingRun | ForEach-Object { Read-Double $_.optimization_ms } | Where-Object { $null -ne $_ })
+        $transferMeans += Get-Mean @($timingRun | ForEach-Object { Read-Double $_.transfer_ms } | Where-Object { $null -ne $_ })
+        $dispatchMeans += Get-Mean @($experimentRun | ForEach-Object { (Read-Double $_.gradient_dispatches) + (Read-Double $_.stats_dispatches) + (Read-Double $_.reduction_dispatches) + (Read-Double $_.xupdate_dispatches) + (Read-Double $_.descent_dispatches) } | Where-Object { $null -ne $_ })
+        $readbackMeans += Get-Mean @($experimentRun | ForEach-Object { Read-Double $_.host_readbacks } | Where-Object { $null -ne $_ })
+        $bufferMeans += Get-Mean @($experimentRun | ForEach-Object { Read-Double $_.tracked_buffer_bytes } | Where-Object { $null -ne $_ })
     }
     $position = @($quality | Where-Object { $_.has_reference -eq '1' } | ForEach-Object { Read-Double $_.position_rel_l2 } | Where-Object { $null -ne $_ })
     $velocity = @($quality | Where-Object { $_.has_reference -eq '1' } | ForEach-Object { Read-Double $_.velocity_rel_l2 } | Where-Object { $null -ne $_ })
@@ -164,18 +189,20 @@ function Summarize-Case {
     $meanStrain = @($quality | ForEach-Object { Read-Double $_.mean_stretch_strain } | Where-Object { $null -ne $_ })
     $maxStrain = @($quality | ForEach-Object { Read-Double $_.max_stretch_strain } | Where-Object { $null -ne $_ })
     $penetration = @($quality | ForEach-Object { Read-Double $_.max_penetration_depth } | Where-Object { $null -ne $_ })
+    $timingMetadata = Get-Content -LiteralPath (Join-Path $TimingDirs[0] 'run_metadata.json') -Raw | ConvertFrom-Json
     [pscustomobject]@{
         scene_id = $Scene.id; mesh_id = $Mesh.id; cloth_width = $Mesh.width; cloth_height = $Mesh.height; vertex_count = $Mesh.width * $Mesh.height
         stretch_stiffness = $Stretch; bending_stiffness = $Bending; solver_variant = $Variant; timing_repetitions = $TimingDirs.Count
-        quality_dir = $QualityDir; timing_dirs = ($TimingDirs -join ';')
-        rendered_frame_wall_ms_mean = Get-Mean @($presentationRows | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ })
+        quality_dir = $QualityDir; timing_dirs = ($TimingDirs -join ';'); timing_frames_per_repetition = $TimingFrames; timing_frame_samples = $presentationRows.Count
+        git_commit = $timingMetadata.git_commit; gpu_name = $timingMetadata.gpu_name; nvidia_driver_version = $timingMetadata.nvidia_driver_version
+        rendered_frame_wall_ms_mean = Get-Mean $frameMeans; rendered_frame_wall_ms_std = Get-Std $frameMeans
         rendered_frame_wall_ms_p95 = Get-Percentile -Values @($presentationRows | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ }) -Quantile 0.95
-        total_ms_mean = Get-Mean @($timingRows | ForEach-Object { Read-Double $_.total_ms } | Where-Object { $null -ne $_ })
-        optimization_ms_mean = Get-Mean @($timingRows | ForEach-Object { Read-Double $_.optimization_ms } | Where-Object { $null -ne $_ })
-        transfer_ms_mean = Get-Mean @($timingRows | ForEach-Object { Read-Double $_.transfer_ms } | Where-Object { $null -ne $_ })
-        dispatches_mean = Get-Mean @($experimentRows | ForEach-Object { (Read-Double $_.gradient_dispatches) + (Read-Double $_.stats_dispatches) + (Read-Double $_.reduction_dispatches) + (Read-Double $_.xupdate_dispatches) + (Read-Double $_.descent_dispatches) } | Where-Object { $null -ne $_ })
-        host_readbacks_mean = Get-Mean @($experimentRows | ForEach-Object { Read-Double $_.host_readbacks } | Where-Object { $null -ne $_ })
-        tracked_buffer_bytes_mean = Get-Mean @($experimentRows | ForEach-Object { Read-Double $_.tracked_buffer_bytes } | Where-Object { $null -ne $_ })
+        total_ms_mean = Get-Mean $totalMeans; total_ms_std = Get-Std $totalMeans
+        optimization_ms_mean = Get-Mean $optimizationMeans; optimization_ms_std = Get-Std $optimizationMeans
+        transfer_ms_mean = Get-Mean $transferMeans; transfer_ms_std = Get-Std $transferMeans
+        dispatches_mean = Get-Mean $dispatchMeans; dispatches_std = Get-Std $dispatchMeans
+        host_readbacks_mean = Get-Mean $readbackMeans; host_readbacks_std = Get-Std $readbackMeans
+        tracked_buffer_bytes_mean = Get-Mean $bufferMeans; tracked_buffer_bytes_std = Get-Std $bufferMeans
         p95_position_rel_l2 = Get-Percentile -Values $position -Quantile 0.95; p95_velocity_rel_l2 = Get-Percentile -Values $velocity -Quantile 0.95
         p95_energy_rel_error = Get-Percentile -Values $energy -Quantile 0.95; p95_mean_stretch_strain = Get-Percentile -Values $meanStrain -Quantile 0.95
         p95_max_stretch_strain = Get-Percentile -Values $maxStrain -Quantile 0.95; max_penetration_depth = if ($penetration.Count -gt 0) { ($penetration | Measure-Object -Maximum).Maximum } else { $null }
@@ -186,11 +213,12 @@ function Summarize-Case {
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $manifest = [ordered]@{
-    protocol_version = 1; label = $RunLabel; measurement = 'rendered-end-to-end'; render_width = 1600; render_height = 900
+    protocol_version = 2; label = $RunLabel; measurement = 'rendered-end-to-end'; render_width = 1600; render_height = 900
     scenes = $scenes; meshes = $meshes; stretch_stiffnesses = $stretchValues; bending_stiffnesses = $bendingValues; solver_variants = $SolverVariants
     reference = [ordered]@{ frames = $ReferenceFrames; warmup = $ReferenceWarmup; iterations = $ReferenceIterations }
     quality = [ordered]@{ frames = $QualityFrames; warmup = $QualityWarmup; timing_quality_metrics = $false }
     timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; repetitions = $TimingRepetitions; iterations_per_frame = $IterationsPerFrame }
+    process_timeout_seconds = $ProcessTimeoutSeconds; inter_run_delay_milliseconds = $InterRunDelayMilliseconds
 }
 [System.IO.File]::WriteAllText((Join-Path $OutputDir 'manifest.json'), ($manifest | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
 Write-Host "Scene/material manifest: $(Join-Path $OutputDir 'manifest.json')"

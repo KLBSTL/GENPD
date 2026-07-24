@@ -65,3 +65,12 @@ stretch stiffness 80, and bending stiffness 20. It produced a rendered CPU
 reference, a quality comparison, and an untraced rendered timing run. Its two
 frames only validate the square/rectangle and metric plumbing; they are not
 formal material-matrix evidence.
+
+`results/smoke-scene-material-r2-schema` repeats the same kind of plumbing
+check under the protocol-2 runner: rendered reference and quality passes plus
+two protected timing repetitions. It confirms that the summary contains the
+per-repetition frame budget, total sample count, mean/std fields, commit, GPU,
+and driver metadata. Its one-frame configuration remains smoke-only. The
+formal matrix must use both scenes, both mesh shapes, all nine material pairs,
+the 120+20 reference/quality protocol, and three 300+30 timing repetitions.
+`generate_scene_material_figures.py` rejects any smaller or incomplete matrix.

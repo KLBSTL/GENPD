@@ -12,6 +12,7 @@ param(
     [switch]$DisableVsync,
     [int]$RenderWidth = 0,
     [int]$RenderHeight = 0,
+    [int]$ProcessTimeoutSeconds = 0,
     [bool]$NoRender = $false,
     [bool]$Uncapped = $true,
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -43,6 +44,7 @@ $benchmarkScript = Join-Path $ScriptDir 'run_benchmark.ps1'
     -ReferenceExportDir $checkpointDir -QualityCheckpointStride $CheckpointStride `
     -OutputDir $OutputDir -ExePath $ExePath -ProfileGpuQueries:$ProfileGpuQueries `
     -SyncGpu:$SyncGpu -DisableVsync:$DisableVsync -RenderWidth $RenderWidth -RenderHeight $RenderHeight `
+    -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
     -NoRender:$NoRender -Uncapped:$Uncapped -ExtraArgs $ExtraArgs
 if (-not $?) {
     throw 'Reference benchmark failed.'

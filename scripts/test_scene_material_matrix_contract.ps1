@@ -10,8 +10,9 @@ $root = Join-Path $ProjectRoot (Join-Path 'results' ('test-scene-material-contra
 $manifestPath = Join-Path $root 'manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'Scene/material manifest was not produced.' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ($manifest.measurement -ne 'rendered-end-to-end' -or $manifest.meshes.Count -ne 2 -or $manifest.meshes[1].width -ne 512 -or $manifest.meshes[1].height -ne 128) {
+if ($manifest.protocol_version -ne 2 -or $manifest.measurement -ne 'rendered-end-to-end' -or $manifest.meshes.Count -ne 2 -or $manifest.meshes[1].width -ne 512 -or $manifest.meshes[1].height -ne 128) {
     throw 'Scene/material manifest does not encode the required rendered square/rectangular matrix.'
 }
 if ($manifest.stretch_stiffnesses.Count -ne 3 -or $manifest.bending_stiffnesses.Count -ne 3) { throw 'Scene/material manifest does not encode the material matrix.' }
+if ($manifest.timing.repetitions -ne 3 -or $manifest.process_timeout_seconds -ne 300) { throw 'Scene/material manifest does not encode the rendered timing protocol.' }
 Write-Host "Scene/material matrix contract passed: $root"
