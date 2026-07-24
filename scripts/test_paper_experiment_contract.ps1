@@ -47,5 +47,8 @@ if ($manifest.calibration.candidate_iterations.Count -ne 13 -or
 if ($manifest.execution.process_timeout_seconds -ne 600 -or $manifest.execution.inter_run_delay_milliseconds -ne 1000) {
     throw 'Paper experiment manifest does not encode the R2 execution protection contract.'
 }
+if (-not [bool]$manifest.scope.complete_matrix -or -not [bool]$manifest.scope.paper_figure_eligible -or $manifest.scope.purpose -ne 'formal-r2') {
+    throw 'Default paper experiment manifest must remain a complete, figure-eligible R2 matrix.'
+}
 
 Write-Output "Paper experiment contract passed: $manifestPath"

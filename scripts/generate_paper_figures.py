@@ -99,6 +99,9 @@ def validate_inputs(run_root):
     with open(manifest_path, 'r') as handle:
         manifest = json.load(handle)
     ensure(manifest.get('protocol_version') == 2, 'Unexpected manifest protocol version.')
+    ensure(manifest.get('scope', {}).get('complete_matrix') is True and
+           manifest.get('scope', {}).get('paper_figure_eligible') is True,
+           'Formal paper figures require a complete, figure-eligible R2 matrix.')
     ensure(manifest['performance']['repetitions'] == 3, 'Formal figures require three repetitions.')
     ensure(abs(float(manifest['quality_target']['position_rel_l2_p95']) - 1e-3) < 1e-15,
            'Unexpected equal-quality threshold.')

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ProjectRoot = '',
-    [string]$RunLabel = 'paper-20260723-r2',
+    [string]$RunLabel = 'paper-20260724-r2',
     [string]$RunRoot = '',
     [ValidateSet('manifest', 'reference', 'calibrate', 'performance', 'stability', 'capture', 'all')]
     [string]$Stage = 'all',
@@ -9,7 +9,10 @@ param(
     [switch]$Force,
     [switch]$ProfileGpuQueries,
     [int]$ProcessTimeoutSeconds = 600,
-    [int]$InterRunDelayMilliseconds = 1000
+    [int]$InterRunDelayMilliseconds = 1000,
+    [string[]]$SceneIds = @(),
+    [int[]]$ClothDimensions = @(),
+    [switch]$AllowPartialMatrix
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,11 +34,32 @@ foreach ($tool in @($benchmarkScript, $referenceScript)) {
     if (-not (Test-Path -LiteralPath $tool)) { throw "Missing experiment tool: $tool" }
 }
 
-$scenes = @(
+$fullScenes = @(
     [ordered]@{ id = 'hanging'; path = 'scenes\test_scene.xml' },
     [ordered]@{ id = 'moving-sphere'; path = 'scenes\moving_sphere_cloth.xml' }
 )
-$resolutions = @(128, 256, 386)
+$fullResolutions = @(128, 256, 386)
+$scenes = @($fullScenes)
+$resolutions = @($fullResolutions)
+
+if ($SceneIds.Count -gt 0) {
+    $unknownSceneIds = @($SceneIds | Where-Object { $_ -notin @($fullScenes | ForEach-Object { $_.id }) })
+    if ($unknownSceneIds.Count -gt 0) { throw "Unknown scene id(s): $($unknownSceneIds -join ', ')" }
+    $scenes = @($fullScenes | Where-Object { $_.id -in $SceneIds })
+}
+if ($ClothDimensions.Count -gt 0) {
+    $unknownDimensions = @($ClothDimensions | Where-Object { $_ -notin $fullResolutions })
+    if ($unknownDimensions.Count -gt 0) { throw "Unknown cloth dimension(s): $($unknownDimensions -join ', ')" }
+    $resolutions = @($fullResolutions | Where-Object { $_ -in $ClothDimensions })
+}
+
+$isFullMatrix = $scenes.Count -eq $fullScenes.Count -and $resolutions.Count -eq $fullResolutions.Count
+if (-not $isFullMatrix -and -not $AllowPartialMatrix) {
+    throw 'A filtered R2 run must use -AllowPartialMatrix. Partial matrices are protocol preflights and cannot generate paper figures.'
+}
+if (-not $isFullMatrix -and ($Stage -in @('stability', 'capture', 'all'))) {
+    throw 'Partial-matrix R2 runs support only manifest, reference, calibrate, and performance stages.'
+}
 $variants = @(
     'cpu-ncg',
     'gpu-edge-scatter',
@@ -121,6 +145,13 @@ function Write-Manifest {
         resolutions = $resolutions
         scenes = $scenes
         variants = $variants
+        scope = [ordered]@{
+            complete_matrix = $isFullMatrix
+            paper_figure_eligible = $isFullMatrix
+            purpose = if ($isFullMatrix) { 'formal-r2' } else { 'protocol-preflight-not-paper-evidence' }
+            selected_scene_ids = @($scenes | ForEach-Object { $_.id })
+            selected_resolutions = @($resolutions)
+        }
         quality_target = [ordered]@{
             reference_variant = 'cpu-ncg'
             reference_iterations_per_frame = 100
@@ -434,10 +465,12 @@ function Invoke-Calibration {
     })
     $validityRows | Sort-Object scene_id, cloth_dimension, solver_variant | Export-Csv -LiteralPath (Join-Path $RunRoot 'validity_matrix.csv') -NoTypeInformation
     $requiredGatherVariants = @($ncgVariants | Where-Object { $_ -ne 'cpu-ncg' -and $_ -ne 'gpu-edge-scatter' })
-    foreach ($requiredVariant in $requiredGatherVariants) {
-        $required = @($validityRows | Where-Object { $_.scene_id -eq 'hanging' -and [int]$_.cloth_dimension -eq 386 -and $_.solver_variant -eq $requiredVariant })
-        if ($required.Count -ne 1 -or $required[0].qualified -ne 1) {
-            throw "Required 386^2 hanging gather case failed its quality gate: $requiredVariant. See validity_matrix.csv."
+    if ($isFullMatrix) {
+        foreach ($requiredVariant in $requiredGatherVariants) {
+            $required = @($validityRows | Where-Object { $_.scene_id -eq 'hanging' -and [int]$_.cloth_dimension -eq 386 -and $_.solver_variant -eq $requiredVariant })
+            if ($required.Count -ne 1 -or $required[0].qualified -ne 1) {
+                throw "Required 386^2 hanging gather case failed its quality gate: $requiredVariant. See validity_matrix.csv."
+            }
         }
     }
     if ($selectedRows.Count -eq 0) { throw 'No calibration case met the equal-quality threshold.' }
