@@ -256,6 +256,7 @@ inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; 
 	void SetArmijoBeta(ScalarType beta);
 	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
 	void SetProfileLineSearchDecisions(bool enabled);
+	void SetForceCS2CpuStateRoundtrip(bool enabled);
 protected:
 
 	// simulation constants
@@ -476,6 +477,7 @@ unsigned int m_quality_checkpoint_stride;
 	bool m_cs_gpu_state_valid;
 	bool m_cs_cpu_state_stale;
 	bool m_cs_skip_cpu_damping_once;
+	bool m_force_cs2_cpu_state_roundtrip;
 
 
 	std::vector<float> test_;

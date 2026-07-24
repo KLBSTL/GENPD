@@ -443,6 +443,7 @@ void GenPDWriteRunMetadata(
 	out << "    \"armijo_beta\": \"" << JsonEscape(EnvValue("GENPD_ARMIJO_BETA")) << "\",\n";
 	out << "    \"ncg_restart_mode\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_MODE")) << "\",\n";
 	out << "    \"ncg_restart_period\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_PERIOD")) << "\",\n";
+    out << "    \"force_cpu_state_roundtrip\": \"" << JsonEscape(EnvValue("GENPD_FORCE_CPU_STATE_ROUNDTRIP")) << "\",\n";
 	out << "    \"line_search_decisions_profiled\": \"" << JsonEscape(EnvValue("GENPD_PROFILE_LINE_SEARCH_DECISIONS")) << "\"\n";
 	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";

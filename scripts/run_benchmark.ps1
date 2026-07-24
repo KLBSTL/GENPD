@@ -13,6 +13,7 @@ param(
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
+    [switch]$ForceCpuStateRoundtrip,
     [switch]$SyncGpu,
     [switch]$DisableVsync,
     [int]$CaptureFrame = -1,
@@ -110,6 +111,12 @@ if ($CaptureFrame -ge 0) {
 if ($NoRender -and $RunLabel -match '^paper-') {
     throw 'Paper-labelled runs must use rendered measurements; --no-render is reserved for diagnostics and short regressions.'
 }
+if ($ForceCpuStateRoundtrip -and $SolverVariant -ne 'gpu-gather-fusion-batched-ls-persistent') {
+    throw 'ForceCpuStateRoundtrip is defined only for gpu-gather-fusion-batched-ls-persistent.'
+}
+if ($ForceCpuStateRoundtrip -and $RunLabel -match '^paper-') {
+    throw 'ForceCpuStateRoundtrip is a diagnostic counterfactual and cannot use a paper-labelled run label.'
+}
 
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 Set-RunMetadataEnv -ProjectRoot $ProjectRoot
@@ -130,6 +137,7 @@ if ($Uncapped) { $appArgs += '--uncapped' }
 if ($SyncGpu) { $appArgs += '--sync-gpu' }
 if ($DisableVsync) { $appArgs += '--disable-vsync' }
 if ($ProfileGpuQueries) { $appArgs += '--profile-gpu-queries' }
+if ($ForceCpuStateRoundtrip) { $appArgs += '--force-cpu-state-roundtrip' }
 if ($IterationsPerFrame -gt 0) { $appArgs += @('--iterations-per-frame', $IterationsPerFrame) }
 if ($ReferenceExportDir -ne '') { $appArgs += @('--reference-export-dir', [System.IO.Path]::GetFullPath($ReferenceExportDir)) }
 if ($QualityReferenceDir -ne '') { $appArgs += @('--quality-reference-dir', [System.IO.Path]::GetFullPath($QualityReferenceDir)) }

@@ -666,6 +666,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs_gpu_state_valid = false;
 	m_cs_cpu_state_stale = false;
 	m_cs_skip_cpu_damping_once = false;
+	m_force_cs2_cpu_state_roundtrip = false;
 
 	m_gradient_shader_file = "./shaders/gradient.comp";
 	m_gradient_scatter_shader_file = "./shaders/gradient_scatter.comp";
@@ -1961,6 +1962,9 @@ void Simulation::syncCS2GpuStateToCPU()
 
 	const std::size_t vector_buffer_bytes = static_cast<std::size_t>(m_mesh->m_system_dimension) * sizeof(ScalarType);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, csPositionID);
+	// Position and velocity each require a CPU-visible buffer readback.
+	++g_cs_profile_host_readbacks;
+	++g_cs_profile_host_readbacks;
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_positions.data());
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, collisionVelocityID);
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_velocities.data());
@@ -2369,6 +2373,11 @@ void Simulation::SetProfileLineSearchDecisions(bool enabled)
 	m_profile_line_search_decisions = enabled;
 }
 
+void Simulation::SetForceCS2CpuStateRoundtrip(bool enabled)
+{
+	m_force_cs2_cpu_state_roundtrip = enabled;
+}
+
 void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant)
 {
 	if (!m_profile_logging_enabled)
@@ -2405,7 +2414,7 @@ static std::ofstream quality_profile_file;
 		experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2499,6 +2508,7 @@ initialized = true;
 		experiment_profile_file << frame << ","
 			<< GenPDExperimentVariantName() << ","
 			<< ((GenPDExperimentUsesPersistentBuffers() && m_cs_gpu_state_valid) ? 1 : 0) << ","
+			<< (m_force_cs2_cpu_state_roundtrip ? 1 : 0) << ","
 			<< g_cs_profile_gradient_dispatches << ","
 			<< g_cs_profile_stats_dispatches << ","
 			<< g_cs_profile_reduction_dispatches << ","
@@ -4463,6 +4473,13 @@ void Simulation::integrateImplicitMethod()
 	m_last_profile_max_position = max_position;
 
 	const bool used_gpu_state_update = use_cs_gpu_state && !m_last_profile_exploded;
+	if (used_gpu_state_update && m_force_cs2_cpu_state_roundtrip)
+	{
+		// Diagnostic counterfactual: retain the persistent solver path, but make
+		// the next frame rebuild its state from CPU position and velocity arrays.
+		syncCS2GpuStateToCPU();
+		invalidateCS2GpuState();
+	}
 	TimerWrapper update;
 	update.Tic();
 
@@ -4482,7 +4499,7 @@ void Simulation::integrateImplicitMethod()
 	{
 		collisionPostProcessCS(m_mesh->m_current_positions, m_mesh->m_current_velocities);
 	}
-	m_cs_render_position_valid = use_cs_ncg && !m_last_profile_exploded;
+	m_cs_render_position_valid = use_cs_ncg && !m_last_profile_exploded && !m_force_cs2_cpu_state_roundtrip;
 
 	colli.Toc();
 	colli.Report("colli", m_verbose_show_optimization_time);
