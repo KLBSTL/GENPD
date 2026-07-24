@@ -91,11 +91,11 @@ The fix makes `update_mode == 0` write `d = -g` without reading old descent.
 `frame_profile_extended.csv` now includes `gradient_dot_descent` for this
 diagnostic boundary.
 
-The repaired actual-render regressions are
-`results/gather-regression-h386-historic44-fixed` and
-`results/gather-regression-h386-high-fixed`. Together they cover all four
-gather variants at `386^2` hanging cloth for every R2 candidate budget
-`{1,2,4,6,8,10,12,16,20,24,32,48,64}`. All 52 cases completed three measured
-frames after one warm-up frame with no invalid state, no `process_timeout`, and
-no simultaneous `converged`/`exploded` flag. These are stability regressions,
-not equal-quality performance measurements; R2 calibration remains pending.
+The repaired, commit-aligned actual-render regression is
+`results/gather-regression-h386-0243d0b`. It covers all four gather variants at
+`386^2` hanging cloth for every R2 candidate budget
+`{1,2,4,6,8,10,12,16,20,24,32,48,64}`. All 52 cases record commit `0243d0b`
+and completed three measured frames after one warm-up frame with no invalid
+state, no `process_timeout`, and no simultaneous `converged`/`exploded` flag.
+These are stability regressions, not equal-quality performance measurements;
+R2 calibration remains pending.
