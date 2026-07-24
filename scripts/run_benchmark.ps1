@@ -144,7 +144,10 @@ if ($ExtraArgs) { $appArgs += $ExtraArgs }
 
 $logPath = Join-Path $OutputDir 'benchmark_stdout.log'
 Write-Host "Running: $ExePath $($appArgs -join ' ')"
-Push-Location (Split-Path -Parent $ExePath)
+# Legacy OpenGL runtime DLLs are part of the project root, while the Release
+# executable lives below x64\Release. Keep the process working directory at
+# the root so interactive, benchmark, and profiler launches resolve alike.
+Push-Location $ProjectRoot
 try {
     if ($ProcessTimeoutSeconds -eq 0) {
         & $ExePath @appArgs *>&1 | Tee-Object -FilePath $logPath
@@ -155,7 +158,7 @@ try {
         $argumentLine = ($appArgs | ForEach-Object {
             if ($_ -match '[\s\"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
         }) -join ' '
-        $process = Start-Process -FilePath $ExePath -ArgumentList $argumentLine -WorkingDirectory (Split-Path -Parent $ExePath) `
+        $process = Start-Process -FilePath $ExePath -ArgumentList $argumentLine -WorkingDirectory $ProjectRoot `
             -RedirectStandardOutput $logPath -RedirectStandardError $stderrPath -PassThru -NoNewWindow
         if (-not $process.WaitForExit($ProcessTimeoutSeconds * 1000)) {
             $process.Kill()

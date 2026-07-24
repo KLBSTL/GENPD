@@ -96,7 +96,9 @@ $nsysArgs = @(
 ) + $appArgs
 
 Write-Host "Running Nsight Systems: $NsysPath $($nsysArgs -join ' ')"
-Push-Location (Split-Path -Parent $ExePath)
+# Nsight launches the legacy executable directly, so retain the same runtime
+# DLL search path as run_benchmark.ps1.
+Push-Location $ProjectRoot
 try {
     & $NsysPath @nsysArgs
     $exitCode = $LASTEXITCODE
