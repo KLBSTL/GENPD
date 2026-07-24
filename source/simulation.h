@@ -446,6 +446,7 @@ unsigned int m_quality_checkpoint_stride;
 	ScalarType m_last_profile_step_size;
 	ScalarType m_last_profile_objective_energy;
 	ScalarType m_last_profile_gradient_norm;
+	bool m_last_profile_gradient_norm_sampled;
 	ScalarType m_last_profile_max_displacement;
 	ScalarType m_last_profile_max_position;
 

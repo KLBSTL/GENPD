@@ -18,6 +18,10 @@ The NCG gradient/statistics buffer is not used as a finite-state gate in this
 mode because it is intentionally not read back on the persistent route. The
 position/velocity statistics are the authoritative validity gate.
 
+Accordingly, persistent frames write `gradient_norm=0` together with
+`gradient_norm_sampled=0` in `frame_profile_extended.csv`. The value is an
+explicit unavailable marker, not a zero-gradient or convergence claim.
+
 ## Smoke Evidence Only
 
 `results/smoke-persistent-sphere-h386-final` used actual rendering with

@@ -651,6 +651,7 @@ m_quality_checkpoint_stride = 1;
 	m_last_profile_step_size = 0.0;
 	m_last_profile_objective_energy = 0.0;
 	m_last_profile_gradient_norm = 0.0;
+	m_last_profile_gradient_norm_sampled = false;
 	m_last_profile_max_displacement = 0.0;
 	m_last_profile_max_position = 0.0;
 
@@ -2396,7 +2397,7 @@ static std::ofstream quality_profile_file;
 		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (extended_profile_file.is_open())
 		{
-			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,gradient_norm_sampled,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
 			extended_profile_file.flush();
 		}
 		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
@@ -2476,6 +2477,7 @@ initialized = true;
 			<< (m_last_profile_exploded ? 1 : 0) << ","
 			<< m_last_profile_iterations << ","
 			<< m_last_profile_gradient_norm << ","
+			<< (m_last_profile_gradient_norm_sampled ? 1 : 0) << ","
 			<< m_last_profile_max_position << ","
 			<< m_last_profile_objective_energy << ","
 			<< g_cs_profile_full_linesearch_calls << ","
@@ -4452,7 +4454,10 @@ void Simulation::integrateImplicitMethod()
 			m_last_profile_objective_energy = 0.0;
 		}
 	}
-	m_last_profile_gradient_norm = (use_cs_ncg && !use_cs_gpu_state) ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : (xpbd_executed ? 0.0 : gradient_dir.norm());
+	m_last_profile_gradient_norm_sampled = (use_cs_ncg && !use_cs_gpu_state) || (!use_cs_ncg && !xpbd_executed);
+	m_last_profile_gradient_norm = m_last_profile_gradient_norm_sampled
+		? ((use_cs_ncg && !use_cs_gpu_state) ? std::sqrt(std::max<ScalarType>(0.0, m_cs_gradient_norm_sq)) : gradient_dir.norm())
+		: 0.0;
 	m_last_profile_max_displacement = max_displacement;
 	m_last_profile_max_position = max_position;
 
