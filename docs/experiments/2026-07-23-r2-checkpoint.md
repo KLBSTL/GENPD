@@ -74,3 +74,28 @@ and driver metadata. Its one-frame configuration remains smoke-only. The
 formal matrix must use both scenes, both mesh shapes, all nine material pairs,
 the 120+20 reference/quality protocol, and three 300+30 timing repetitions.
 `generate_scene_material_figures.py` rejects any smaller or incomplete matrix.
+
+## Gather Stability Repair
+
+`results/gradient-diagnostics-r2-preflight` is diagnostic-only (no rendering
+and never paper evidence). It verifies the CSR and initial CPU/edge-scatter/
+gather gradient on both scenes at `128^2`, `256^2`, and `386^2`. All six cases
+passed the `1e-4` relative threshold; gather relative L2 ranged from about
+`5.3e-7` to `1.3e-6`. The historical E0 issue was therefore not an adjacency
+or initial-gradient mismatch.
+
+The rendered regression then found an uninitialised-descent defect in
+`shaders/descent.comp`: its initial update evaluated `-g + 0*d_old`, and IEEE
+`0 * NaN` propagated an uninitialised GPU buffer value into the position update.
+The fix makes `update_mode == 0` write `d = -g` without reading old descent.
+`frame_profile_extended.csv` now includes `gradient_dot_descent` for this
+diagnostic boundary.
+
+The repaired actual-render regressions are
+`results/gather-regression-h386-historic44-fixed` and
+`results/gather-regression-h386-high-fixed`. Together they cover all four
+gather variants at `386^2` hanging cloth for every R2 candidate budget
+`{1,2,4,6,8,10,12,16,20,24,32,48,64}`. All 52 cases completed three measured
+frames after one warm-up frame with no invalid state, no `process_timeout`, and
+no simultaneous `converged`/`exploded` flag. These are stability regressions,
+not equal-quality performance measurements; R2 calibration remains pending.

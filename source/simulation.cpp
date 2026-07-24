@@ -2397,7 +2397,7 @@ static std::ofstream quality_profile_file;
 		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (extended_profile_file.is_open())
 		{
-			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,gradient_norm_sampled,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,gradient_dot_descent,gradient_norm_sampled,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
 			extended_profile_file.flush();
 		}
 		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
@@ -2477,6 +2477,7 @@ initialized = true;
 			<< (m_last_profile_exploded ? 1 : 0) << ","
 			<< m_last_profile_iterations << ","
 			<< m_last_profile_gradient_norm << ","
+			<< m_cs_gradient_dot_descent << ","
 			<< (m_last_profile_gradient_norm_sampled ? 1 : 0) << ","
 			<< m_last_profile_max_position << ","
 			<< m_last_profile_objective_energy << ","
