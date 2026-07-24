@@ -23,6 +23,11 @@ x64/
 
 # Generated runtime output
 output/
+results/
+*.nsys-rep
+*.ncu-rep
+*.sqlite
+__pycache__/
 
 # Local backup/corrupt folders and files
 GenPD/

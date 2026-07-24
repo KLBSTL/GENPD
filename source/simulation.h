@@ -101,6 +101,13 @@ typedef enum
 	LS_TYPE_TOTAL_NUM,
 } LinesearchType;
 
+typedef enum
+{
+	NCG_RESTART_NONE = 0,
+	NCG_RESTART_PERIODIC = 1,
+	NCG_RESTART_NON_DESCENT = 2
+} NCGRestartMode;
+
 
 struct alignas(16) ParamsUBO {
 	float t0;  // 0
@@ -147,6 +154,7 @@ public:
 	void Update();
 	void Draw(const VBO& vbos);
 	void LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant);
+void ConfigureQualityMetrics(const std::string& reference_export_dir, const std::string& quality_reference_dir, unsigned int checkpoint_stride, bool enable_quality_metrics);
 	bool PrepareCS2RenderBuffers();
 	GLuint CS2RenderPositionBuffer() const;
 	GLuint CS2RenderNormalBuffer() const;
@@ -234,7 +242,21 @@ public:
 	inline void SetScene(Scene* scene) { m_scene = scene; }
 	inline void SetStepMode(bool step_mode) { m_step_mode = step_mode; }
 	inline ScalarType Timestep() { return m_h; }
-
+	inline void SetTimestep(ScalarType timestep) { if (timestep > 0) { m_h = timestep; } }
+	inline void SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending)
+	{
+		if (stretch > 0) { m_stiffness_stretch = stretch; }
+		if (bending > 0) { m_stiffness_bending = bending; }
+		if (m_stiffness_auto_laplacian_stiffness) { m_stiffness_laplacian = 2 * m_stiffness_stretch + m_stiffness_bending; }
+	}
+inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
+inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
+	bool VerifyCSGradient(const std::string& output_dir);
+	void SetBatchedLineSearchK(unsigned int candidate_count);
+	void SetArmijoBeta(ScalarType beta);
+	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
+	void SetProfileLineSearchDecisions(bool enabled);
+	void SetForceCS2CpuStateRoundtrip(bool enabled);
 protected:
 
 	// simulation constants
@@ -328,6 +350,9 @@ protected:
 	ScalarType m_ls_alpha;
 	ScalarType m_ls_beta;
 	ScalarType m_ls_step_size;
+	unsigned int m_batched_ls_k;
+	NCGRestartMode m_ncg_restart_mode;
+	unsigned int m_ncg_restart_period;
 	// prefetched instructions in linesearch
 	bool m_ls_is_first_iteration;
 	VectorX m_ls_prefetched_gradient;
@@ -394,9 +419,16 @@ protected:
 	bool m_verbose_show_energy;
 	bool m_verbose_show_factorization_warning;
 	bool m_profile_logging_enabled;
+bool m_quality_metrics_enabled;
+bool m_profile_line_search_decisions;
+std::string m_reference_export_dir;
+std::string m_quality_reference_dir;
+unsigned int m_quality_checkpoint_stride;
 	bool m_last_profile_used_cs_ncg;
 	bool m_last_profile_converged;
 	bool m_last_profile_exploded;
+	std::string m_last_profile_termination_reason;
+	unsigned int m_last_profile_ncg_restarts;
 	unsigned int m_last_profile_iterations;
 	ScalarType m_last_profile_front_ms;
 	ScalarType m_last_profile_transfer_ms;
@@ -415,6 +447,7 @@ protected:
 	ScalarType m_last_profile_step_size;
 	ScalarType m_last_profile_objective_energy;
 	ScalarType m_last_profile_gradient_norm;
+	bool m_last_profile_gradient_norm_sampled;
 	ScalarType m_last_profile_max_displacement;
 	ScalarType m_last_profile_max_position;
 
@@ -430,20 +463,21 @@ protected:
 
 	// use compute shader
 	bool use_cs = true;
-	GLuint gradient_shader, energy_shader, descent_shader, iner_shader,
+	GLuint gradient_shader, gradient_scatter_shader, gradient_finalize_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
-		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader;
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader;
 
-	GLuint gradient_program, energy_program, computeX_program, descent_program, iner_program,
-		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program;
+	GLuint gradient_program, gradient_scatter_program, gradient_finalize_program, energy_program, computeX_program, descent_program, iner_program,
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
 	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
-	GLuint csPositionID, csStateStatsID;
+	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID;
 	bool m_cs_render_position_valid;
 	bool m_cs_gpu_state_valid;
 	bool m_cs_cpu_state_stale;
 	bool m_cs_skip_cpu_damping_once;
+	bool m_force_cs2_cpu_state_roundtrip;
 
 
 	std::vector<float> test_;
@@ -453,6 +487,7 @@ protected:
 	std::vector<ScalarType> m_cs_mass_diagonal;
 	ScalarType m_cs_gradient_norm_sq;
 	ScalarType m_cs_gradient_dot_descent;
+	unsigned int m_cs_ncg_restart_count;
 	bool m_cs_edge_buffer_dirty;
 
 	bool li_test = true;
@@ -1099,6 +1134,8 @@ void main() {
 
 	std::vector<glm::vec3> fixed_points;
 	std::string m_gradient_shader_file;
+	std::string m_gradient_scatter_shader_file;
+	std::string m_gradient_finalize_shader_file;
 	std::string m_energy_shader_file;
 	std::string m_objective_shader_file;
 	std::string m_energy_for_linesearch_shader_file;
@@ -1109,6 +1146,8 @@ void main() {
 	std::string m_collision_resolve_shader_file;
 	std::string m_normal_from_triangles_shader_file;
 	std::string m_cs2_state_shader_file;
+std::string m_xpbd_constraints_shader_file;
+std::string m_xpbd_apply_shader_file;
 
 
 	VectorX gradient_dir;
@@ -1145,6 +1184,7 @@ private:
 	void Create_SSBO();
 	void syncCSParams();
 	void rebuildCSAdjacency();
+	bool validateCSAdjacency(std::string& reason) const;
 	void uploadCSResourcesIfNeeded();
 	void uploadCSCollisionPrimitives();
 	bool shouldUseCS2GpuState();
@@ -1157,6 +1197,7 @@ private:
 	void updateCSStats(bool readback = true);
 	ScalarType readCSStatsFromGPU(bool profile_readback = true);
 	void collisionPostProcessCS(VectorX& x, VectorX& v);
+bool performGPUXPBD(VectorX& x);
 	ScalarType evaluatePotentialEnergyCS(const VectorX& x);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
@@ -1218,6 +1259,7 @@ private:
 	// line search
 	ScalarType lineSearch(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
+	ScalarType lineSearchCSSerial(const VectorX& x, const VectorX& gradient_dir, const VectorX& descent_dir);
 	ScalarType linesearchWithPrefetchedEnergyAndGradientComputing(const VectorX& x, const ScalarType current_energy, const VectorX& gradient_dir, const VectorX& descent_dir, ScalarType& next_energy, VectorX& next_gradient_dir);
 	ScalarType lineSearch_ncg(const VectorX& x, const  VectorX& gradient_dir, VectorX& descent_dir, const SparseMatrix& Hessian);
 

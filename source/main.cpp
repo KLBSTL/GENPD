@@ -36,6 +36,8 @@
 
 //----------Headers--------------//
 #include "global_headers.h"
+#include <cstdlib>
+#include <fstream>
 #include "math_headers.h"
 #include "openGL_headers.h"
 //----------Framework--------------//
@@ -43,6 +45,8 @@
 #include "timer_wrapper.h"
 #include "stb_image_write.h"
 #include "glsl_wrapper.h"
+#include "runtime_paths.h"
+#include "experiment_variant.h"
 #include "AntTweakBar.h"
 #include "anttweakbar_wrapper.h"
 #include "camera.h"
@@ -67,6 +71,10 @@ SelectionTool* g_selection_tool;
 MatlabDebugger * g_debugger;
 #endif // ENABLE_MATLAB_DEBUGGING
 TimerWrapper g_global_timer;
+TimerWrapper g_benchmark_frame_timer;
+TimerWrapper g_benchmark_render_timer;
+bool g_benchmark_frame_timer_active = false;
+unsigned int g_benchmark_profile_frame = 0;
 int g_interval = 100;
 ScalarType total_time = 0;
 
@@ -114,6 +122,40 @@ bool g_benchmark_disable_vsync = false;
 bool g_benchmark_finish_after_display = false;
 int g_benchmark_frames = 300;
 int g_benchmark_warmup_frames = 30;
+std::string g_cli_project_root;
+std::string g_cli_output_dir;
+std::string g_cli_run_label;
+std::string g_cli_solver_variant;
+int g_cli_iterations_per_frame = 0;
+std::string g_cli_reference_export_dir;
+std::string g_cli_quality_reference_dir;
+int g_cli_quality_checkpoint_stride = 1;
+bool g_cli_quality_metrics = false;
+ScalarType g_cli_timestep = static_cast<ScalarType>(-1);
+ScalarType g_cli_stretch_stiffness = static_cast<ScalarType>(-1);
+ScalarType g_cli_bending_stiffness = static_cast<ScalarType>(-1);
+int g_cli_cloth_dimension = 0;
+int g_cli_cloth_width = 0;
+int g_cli_cloth_height = 0;
+int g_cli_batched_ls_k = 0;
+ScalarType g_cli_armijo_beta = static_cast<ScalarType>(-1);
+std::string g_cli_ncg_restart_mode;
+int g_cli_ncg_restart_period = 0;
+std::string g_cli_verify_cs_gradient_dir;
+std::string g_cli_scene;
+int g_cli_capture_frame = -1;
+std::string g_cli_capture_output;
+int g_cli_capture_width = 0;
+int g_cli_capture_height = 0;
+int g_cli_render_width = 0;
+int g_cli_render_height = 0;
+bool g_cli_capture_pending = false;
+bool g_cli_restore_iterations_per_frame = false;
+unsigned int g_cli_original_iterations_per_frame = 0;
+bool g_cli_profile_gpu_queries = false;
+bool g_cli_profile_line_search_decisions = false;
+bool g_cli_force_cpu_state_roundtrip = false;
+bool g_cli_print_paths = false;
 
 //----------glut function handlers-----------//
 void resize(int, int);
@@ -130,8 +172,10 @@ int parse_nonnegative_int(const char*, const int);
 bool should_use_uncapped_benchmark(void);
 void schedule_next_timeout(void);
 void finish_display_frame(void);
+void log_benchmark_presentation_frame(void);
 void apply_benchmark_swap_interval(void);
 void maybe_finish_benchmark(void);
+void maybe_capture_benchmark_frame(void);
 
 //----------anttweakbar handlers----------//
 void TW_CALL set_handle(void*);
@@ -160,7 +204,7 @@ void init(void);
 void cleanup(void);
 void draw_overlay(void);
 void grab_screen(void);
-void grab_screen(char* filename);
+void grab_screen(const char* filename);
 
 //#include "src\plugins\BlockMethods.h"
 
@@ -196,6 +240,23 @@ int main(int argc, char ** argv)
 {
 	//test();
 	parse_command_line(argc, argv);
+	if (g_cli_render_width > 0 && g_cli_render_height > 0)
+	{
+		g_screen_width = g_cli_render_width;
+		g_screen_height = g_cli_render_height;
+	}
+	if (g_cli_capture_width > 0 && g_cli_capture_height > 0)
+	{
+		g_screen_width = g_cli_capture_width;
+		g_screen_height = g_cli_capture_height;
+	}
+	GenPDInitializeRuntimePaths(
+		argc > 0 ? argv[0] : NULL,
+		g_cli_project_root,
+		g_cli_output_dir,
+		g_cli_run_label,
+		g_cli_profile_gpu_queries,
+		g_cli_print_paths);
 
     // gl init
     glutInit(&argc, argv);
@@ -213,7 +274,135 @@ int main(int argc, char ** argv)
 
     // user init
     init();
-	glutReshapeWindow(g_screen_width, g_screen_height);
+	if (!g_cli_solver_variant.empty())
+	{
+		GenPDExperimentVariant variant;
+		if (!GenPDParseExperimentVariant(g_cli_solver_variant, variant))
+		{
+			std::cerr << "Unknown --solver-variant: " << g_cli_solver_variant << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		GenPDSetExperimentVariant(variant);
+	}
+	if (_putenv_s("GENPD_SOLVER_VARIANT", GenPDExperimentVariantName()) != 0)
+	{
+		std::cerr << "Warning: cannot set solver-variant metadata environment." << std::endl;
+	}
+std::cout << "GenPD solver variant: " << GenPDExperimentVariantName() << std::endl;
+if (g_cli_batched_ls_k > 0)
+{
+    g_simulation->SetBatchedLineSearchK(static_cast<unsigned int>(g_cli_batched_ls_k));
+}
+if (g_cli_armijo_beta > 0)
+{
+    if (g_cli_armijo_beta >= 1.0)
+    {
+        std::cerr << "--armijo-beta must be in (0, 1)." << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    g_simulation->SetArmijoBeta(g_cli_armijo_beta);
+}
+if (!g_cli_ncg_restart_mode.empty())
+{
+    NCGRestartMode restart_mode = NCG_RESTART_NONE;
+    if (g_cli_ncg_restart_mode == "periodic")
+    {
+        restart_mode = NCG_RESTART_PERIODIC;
+    }
+    else if (g_cli_ncg_restart_mode == "non-descent")
+    {
+        restart_mode = NCG_RESTART_NON_DESCENT;
+    }
+    else if (g_cli_ncg_restart_mode != "none")
+    {
+        std::cerr << "Unknown --ncg-restart-mode: " << g_cli_ncg_restart_mode << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    g_simulation->SetNCGRestart(restart_mode, static_cast<unsigned int>(g_cli_ncg_restart_period));
+}
+else if (g_cli_ncg_restart_period > 0)
+{
+    std::cerr << "--ncg-restart-period requires --ncg-restart-mode periodic." << std::endl;
+    exit(EXIT_FAILURE);
+}
+g_simulation->SetProfileLineSearchDecisions(g_cli_profile_line_search_decisions);
+g_simulation->SetForceCS2CpuStateRoundtrip(g_cli_force_cpu_state_roundtrip);
+_putenv_s("GENPD_PROFILE_LINE_SEARCH_DECISIONS", g_cli_profile_line_search_decisions ? "1" : "0");
+_putenv_s("GENPD_FORCE_CPU_STATE_ROUNDTRIP", g_cli_force_cpu_state_roundtrip ? "1" : "0");
+if (g_cli_iterations_per_frame > 0)
+{
+    g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
+g_cli_restore_iterations_per_frame = true;
+g_simulation->SetIterationsPerFrame(static_cast<unsigned int>(g_cli_iterations_per_frame));
+    std::cout << "GenPD iterations per frame: " << g_simulation->IterationsPerFrame() << std::endl;
+}
+const std::string reference_export_dir = g_cli_reference_export_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_reference_export_dir);
+const std::string quality_reference_dir = g_cli_quality_reference_dir.empty() ? std::string() : GenPDResolveProjectPath(g_cli_quality_reference_dir);
+g_simulation->ConfigureQualityMetrics(
+    reference_export_dir,
+    quality_reference_dir,
+    static_cast<unsigned int>(g_cli_quality_checkpoint_stride),
+    g_cli_quality_metrics);
+const std::string iterations_per_frame_metadata = std::to_string(g_simulation->IterationsPerFrame());
+const std::string selected_scene = GenPDResolveProjectPath(g_cli_scene.empty() ? std::string(DEFAULT_SCENE_FILE) : g_cli_scene);
+const std::string timestep_metadata = g_cli_timestep > 0 ? std::to_string(g_cli_timestep) : std::string();
+const std::string stretch_metadata = g_cli_stretch_stiffness > 0 ? std::to_string(g_cli_stretch_stiffness) : std::string();
+const std::string bending_metadata = g_cli_bending_stiffness > 0 ? std::to_string(g_cli_bending_stiffness) : std::string();
+const std::string cloth_dimension_metadata = g_cli_cloth_dimension > 0 ? std::to_string(g_cli_cloth_dimension) : std::string();
+const std::string cloth_width_metadata = g_cli_cloth_width > 0 ? std::to_string(g_cli_cloth_width) : std::string();
+const std::string cloth_height_metadata = g_cli_cloth_height > 0 ? std::to_string(g_cli_cloth_height) : std::string();
+const std::string batched_ls_k_metadata = g_cli_batched_ls_k > 0 ? std::to_string(g_cli_batched_ls_k) : std::string();
+const std::string armijo_beta_metadata = g_cli_armijo_beta > 0 ? std::to_string(g_cli_armijo_beta) : std::string();
+const std::string ncg_restart_period_metadata = g_cli_ncg_restart_period > 0 ? std::to_string(g_cli_ncg_restart_period) : std::string();
+const bool quality_metrics_enabled = g_cli_quality_metrics || !reference_export_dir.empty() || !quality_reference_dir.empty();
+_putenv_s("GENPD_ITERATIONS_PER_FRAME", iterations_per_frame_metadata.c_str());
+_putenv_s("GENPD_REFERENCE_EXPORT_DIR", reference_export_dir.c_str());
+_putenv_s("GENPD_QUALITY_REFERENCE_DIR", quality_reference_dir.c_str());
+_putenv_s("GENPD_QUALITY_CHECKPOINT_STRIDE", std::to_string(g_cli_quality_checkpoint_stride).c_str());
+_putenv_s("GENPD_QUALITY_METRICS", quality_metrics_enabled ? "1" : "0");
+_putenv_s("GENPD_TIMESTEP_OVERRIDE", timestep_metadata.c_str());
+_putenv_s("GENPD_STRETCH_STIFFNESS_OVERRIDE", stretch_metadata.c_str());
+_putenv_s("GENPD_BENDING_STIFFNESS_OVERRIDE", bending_metadata.c_str());
+_putenv_s("GENPD_CLOTH_DIMENSION_OVERRIDE", cloth_dimension_metadata.c_str());
+_putenv_s("GENPD_CLOTH_WIDTH_OVERRIDE", cloth_width_metadata.c_str());
+_putenv_s("GENPD_CLOTH_HEIGHT_OVERRIDE", cloth_height_metadata.c_str());
+_putenv_s("GENPD_BATCHED_LS_K", batched_ls_k_metadata.c_str());
+_putenv_s("GENPD_ARMIJO_BETA", armijo_beta_metadata.c_str());
+_putenv_s("GENPD_NCG_RESTART_MODE", g_cli_ncg_restart_mode.c_str());
+_putenv_s("GENPD_NCG_RESTART_PERIOD", ncg_restart_period_metadata.c_str());
+_putenv_s("GENPD_SCENE", selected_scene.c_str());
+// Configuration loading may reset the window size; CLI rendering dimensions win.
+if (g_cli_render_width > 0 && g_cli_render_height > 0)
+{
+    g_screen_width = g_cli_render_width;
+    g_screen_height = g_cli_render_height;
+}
+if (g_cli_capture_width > 0 && g_cli_capture_height > 0)
+{
+    g_screen_width = g_cli_capture_width;
+    g_screen_height = g_cli_capture_height;
+}
+glutReshapeWindow(g_screen_width, g_screen_height);
+	GenPDWriteRunMetadata(
+		argc,
+		argv,
+		g_benchmark_mode,
+		g_benchmark_frames,
+		g_benchmark_warmup_frames,
+		g_benchmark_no_render,
+		g_benchmark_uncapped,
+		g_benchmark_sync_gpu,
+		g_benchmark_disable_vsync,
+		g_benchmark_hide_window,
+		reinterpret_cast<const char*>(glGetString(GL_VENDOR)),
+		reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+		reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+	if (!g_cli_verify_cs_gradient_dir.empty())
+	{
+		const std::string verification_dir = GenPDResolveOutputPath(g_cli_verify_cs_gradient_dir);
+		const bool verified = g_simulation->VerifyCSGradient(verification_dir);
+		return verified ? EXIT_SUCCESS : EXIT_FAILURE;
+	}
 	if (g_benchmark_mode)
 	{
 		g_pause = false;
@@ -274,10 +463,12 @@ void finish_display_frame(void)
 		glFinish();
 	}
 
+	log_benchmark_presentation_frame();
+
 	if (g_benchmark_finish_after_display)
 	{
 		std::cout << "Benchmark complete after " << g_current_frame
-			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+			<< " frames. Profile: " << GenPDResolveOutputPath("frame_profile.csv") << std::endl;
 		cleanup();
 		exit(EXIT_SUCCESS);
 	}
@@ -286,6 +477,44 @@ void finish_display_frame(void)
 	{
 		schedule_next_timeout();
 	}
+}
+
+void log_benchmark_presentation_frame(void)
+{
+	if (!g_benchmark_frame_timer_active)
+	{
+		return;
+	}
+
+	g_benchmark_frame_timer.Toc();
+	g_benchmark_render_timer.Toc();
+
+	static bool initialized = false;
+	static std::ofstream presentation_profile_file;
+	if (!initialized)
+	{
+		const std::string profile_path = GenPDResolveOutputPath("frame_presentation.csv");
+		GenPDEnsureDirectoryForFile(profile_path);
+		presentation_profile_file.open(profile_path.c_str(), std::ios::out | std::ios::trunc);
+		if (presentation_profile_file.is_open())
+		{
+			presentation_profile_file << "frame,rendered,frame_wall_ms,render_and_present_wall_ms,gpu_sync_enabled,screen_width,screen_height\n";
+			presentation_profile_file.flush();
+		}
+		initialized = true;
+	}
+
+	if (presentation_profile_file.is_open())
+	{
+		presentation_profile_file << g_benchmark_profile_frame << ",1,"
+			<< g_benchmark_frame_timer.DurationInSeconds() * 1000.0 << ","
+			<< g_benchmark_render_timer.DurationInSeconds() * 1000.0 << ","
+			<< (g_benchmark_sync_gpu ? 1 : 0) << ","
+			<< g_screen_width << "," << g_screen_height << "\n";
+		presentation_profile_file.flush();
+	}
+
+	g_benchmark_frame_timer_active = false;
 }
 
 void apply_benchmark_swap_interval(void)
@@ -365,20 +594,32 @@ void timeout(int value)
 		// grab screen
 		if (g_record)
 		{
-			char cap_filename[256];
-			sprintf_s(cap_filename, 256, "output/screenshots/ScreenCap%04d.png", g_current_frame);
-			grab_screen(cap_filename);
+			char cap_name[64];
+			sprintf_s(cap_name, 64, "screenshots\\ScreenCap%04d.png", g_current_frame);
+			const std::string cap_filename = GenPDResolveOutputPath(cap_name);
+			grab_screen(cap_filename.c_str());
 
 			if (g_export_obj)
 			{
-				char mesh_filename[256];
-				sprintf_s(mesh_filename, 256, "output/mesh/Mesh%04d.obj", g_current_frame);
-				g_mesh->ExportToOBJ(mesh_filename);
+				char mesh_name[64];
+				sprintf_s(mesh_name, 64, "mesh\\Mesh%04d.obj", g_current_frame);
+				const std::string mesh_filename = GenPDResolveOutputPath(mesh_name);
+				GenPDEnsureDirectoryForFile(mesh_filename);
+				g_mesh->ExportToOBJ(mesh_filename.c_str());
 
-				char handle_filename[256];
-				sprintf_s(handle_filename, 256, "output/handles/Handle%04d.obj", g_current_frame);
-				g_simulation->SaveAttachmentConstraint(handle_filename);
+				char handle_name[64];
+				sprintf_s(handle_name, 64, "handles\\Handle%04d.obj", g_current_frame);
+				const std::string handle_filename = GenPDResolveOutputPath(handle_name);
+				GenPDEnsureDirectoryForFile(handle_filename);
+				g_simulation->SaveAttachmentConstraint(handle_filename.c_str());
 			}
+		}
+
+		if (g_benchmark_mode && !g_benchmark_no_render)
+		{
+			g_benchmark_profile_frame = g_current_frame;
+			g_benchmark_frame_timer.Tic();
+			g_benchmark_frame_timer_active = true;
 		}
 
 		// update scene
@@ -425,6 +666,10 @@ void display() {
 		return;
 	}
 
+	if (g_benchmark_frame_timer_active)
+	{
+		g_benchmark_render_timer.Tic();
+	}
 
     //Always and only do this at the start of a frame, it wipes the slate clean
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -491,6 +736,7 @@ void display() {
     // Draw tweak bar
     g_config_bar->Draw();
 
+    maybe_capture_benchmark_frame();
     glutSwapBuffers();
 	finish_display_frame();
 }
@@ -592,10 +838,17 @@ void key_press(unsigned char key, int x, int y) {
 			break;
 		case 'g':
 		case 'G':
-			grab_screen(DEFAULT_SCREEN_SHOT_FILE);
-			g_mesh->ExportToOBJ(DEFAULT_OUTPUT_OBJ_FILE);
-			g_simulation->SaveAttachmentConstraint(DEFAULT_OUTPUT_ATTACHMENT_OBJ_FILE);
+		{
+			const std::string screenshot_path = GenPDResolveOutputPath("ScreenShot.png");
+			const std::string mesh_path = GenPDResolveOutputPath("mesh.obj");
+			const std::string handles_path = GenPDResolveOutputPath("handles.obj");
+			grab_screen(screenshot_path.c_str());
+			GenPDEnsureDirectoryForFile(mesh_path);
+			g_mesh->ExportToOBJ(mesh_path.c_str());
+			GenPDEnsureDirectoryForFile(handles_path);
+			g_simulation->SaveAttachmentConstraint(handles_path.c_str());
 			break;
+		}
 		case 'a':
 		case 'A':
 			g_mesh->Update();
@@ -657,6 +910,20 @@ int parse_nonnegative_int(const char* value, const int fallback)
 	return parsed_value >= 0 ? parsed_value : fallback;
 }
 
+ScalarType parse_positive_scalar(const char* value, const ScalarType fallback)
+{
+	if (!value)
+	{
+		return fallback;
+	}
+
+	char* end = NULL;
+	const double parsed_value = std::strtod(value, &end);
+	return end != value && end && *end == '\0' && std::isfinite(parsed_value) && parsed_value > 0.0
+		? static_cast<ScalarType>(parsed_value)
+		: fallback;
+}
+
 void parse_command_line(int argc, char** argv)
 {
 	for (int i = 1; i < argc; ++i)
@@ -707,6 +974,135 @@ void parse_command_line(int argc, char** argv)
 			g_benchmark_disable_vsync = true;
 			g_benchmark_mode = true;
 		}
+		else if (arg == "--project-root" && i + 1 < argc)
+		{
+			g_cli_project_root = argv[++i];
+		}
+		else if (arg == "--output-dir" && i + 1 < argc)
+		{
+			g_cli_output_dir = argv[++i];
+		}
+		else if (arg == "--run-label" && i + 1 < argc)
+		{
+			g_cli_run_label = argv[++i];
+		}
+		else if (arg == "--solver-variant" && i + 1 < argc)
+		{
+			g_cli_solver_variant = argv[++i];
+		}
+        else if (arg == "--iterations-per-frame" && i + 1 < argc)
+        {
+            g_cli_iterations_per_frame = parse_positive_int(argv[++i], g_cli_iterations_per_frame);
+        }
+        else if (arg == "--reference-export-dir" && i + 1 < argc)
+        {
+            g_cli_reference_export_dir = argv[++i];
+        }
+        else if (arg == "--quality-reference-dir" && i + 1 < argc)
+        {
+            g_cli_quality_reference_dir = argv[++i];
+        }
+        else if (arg == "--quality-checkpoint-stride" && i + 1 < argc)
+        {
+            g_cli_quality_checkpoint_stride = parse_positive_int(argv[++i], g_cli_quality_checkpoint_stride);
+        }
+        else if (arg == "--quality-metrics")
+        {
+            g_cli_quality_metrics = true;
+        }
+        else if (arg == "--timestep" && i + 1 < argc)
+        {
+            g_cli_timestep = parse_positive_scalar(argv[++i], g_cli_timestep);
+        }
+        else if (arg == "--stretch-stiffness" && i + 1 < argc)
+        {
+            g_cli_stretch_stiffness = parse_positive_scalar(argv[++i], g_cli_stretch_stiffness);
+        }
+        else if (arg == "--bending-stiffness" && i + 1 < argc)
+        {
+            g_cli_bending_stiffness = parse_positive_scalar(argv[++i], g_cli_bending_stiffness);
+        }
+        else if (arg == "--cloth-dimension" && i + 1 < argc)
+        {
+            g_cli_cloth_dimension = parse_positive_int(argv[++i], g_cli_cloth_dimension);
+        }
+        else if (arg == "--cloth-width" && i + 1 < argc)
+        {
+            g_cli_cloth_width = parse_positive_int(argv[++i], g_cli_cloth_width);
+        }
+        else if (arg == "--cloth-height" && i + 1 < argc)
+        {
+            g_cli_cloth_height = parse_positive_int(argv[++i], g_cli_cloth_height);
+        }
+        else if (arg == "--batched-ls-k" && i + 1 < argc)
+        {
+            g_cli_batched_ls_k = parse_positive_int(argv[++i], g_cli_batched_ls_k);
+        }
+        else if (arg == "--armijo-beta" && i + 1 < argc)
+        {
+            g_cli_armijo_beta = parse_positive_scalar(argv[++i], g_cli_armijo_beta);
+        }
+        else if (arg == "--ncg-restart-mode" && i + 1 < argc)
+        {
+            g_cli_ncg_restart_mode = argv[++i];
+        }
+        else if (arg == "--ncg-restart-period" && i + 1 < argc)
+        {
+            g_cli_ncg_restart_period = parse_positive_int(argv[++i], g_cli_ncg_restart_period);
+        }
+        else if (arg == "--verify-cs-gradient" && i + 1 < argc)
+        {
+            g_cli_verify_cs_gradient_dir = argv[++i];
+        }
+        else if (arg == "--scene" && i + 1 < argc)
+        {
+            g_cli_scene = argv[++i];
+        }
+        else if (arg == "--capture-frame" && i + 1 < argc)
+        {
+            g_cli_capture_frame = parse_nonnegative_int(argv[++i], g_cli_capture_frame);
+            g_cli_capture_pending = g_cli_capture_frame >= 0;
+        }
+        else if (arg == "--capture-output" && i + 1 < argc)
+        {
+            g_cli_capture_output = argv[++i];
+        }
+        else if (arg == "--capture-resolution" && i + 2 < argc)
+        {
+            const int width = parse_positive_int(argv[++i], 0);
+            const int height = parse_positive_int(argv[++i], 0);
+            if (width > 0 && height > 0)
+            {
+                g_cli_capture_width = width;
+                g_cli_capture_height = height;
+            }
+        }
+        else if (arg == "--render-resolution" && i + 2 < argc)
+        {
+            const int width = parse_positive_int(argv[++i], 0);
+            const int height = parse_positive_int(argv[++i], 0);
+            if (width > 0 && height > 0)
+            {
+                g_cli_render_width = width;
+                g_cli_render_height = height;
+            }
+        }
+        else if (arg == "--profile-gpu-queries")
+		{
+			g_cli_profile_gpu_queries = true;
+        }
+        else if (arg == "--profile-line-search-decisions")
+        {
+            g_cli_profile_line_search_decisions = true;
+        }
+        else if (arg == "--force-cpu-state-roundtrip")
+        {
+            g_cli_force_cpu_state_roundtrip = true;
+        }
+        else if (arg == "--print-paths")
+		{
+			g_cli_print_paths = true;
+		}
 		else if (arg == "--help" || arg == "-h")
 		{
 			std::cout << "GenPD options:\n"
@@ -718,11 +1114,72 @@ void parse_command_line(int argc, char** argv)
 				<< "  --uncapped                  Benchmark without the 30 FPS timer cap.\n"
 				<< "  --sync-gpu                  Call glFinish after benchmark swap buffers.\n"
 				<< "  --disable-vsync             Try to disable WGL swap interval for benchmark.\n"
+				<< "  --project-root PATH         Resolve config/shaders/textures from this GenPD root.\n"
+				<< "  --output-dir PATH           Write benchmark/profile outputs to this directory.\n"
+				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
+                << "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
+                << "  --profile-line-search-decisions  Trace Armijo decisions; diagnostic only.\n"
+                << "  --force-cpu-state-roundtrip  Diagnostic: synchronize persistent GPU state each frame.\n"
+                << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
+                << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
+                << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"
+                << "  --quality-checkpoint-stride N  Export/check checkpoints every N frames.\n"
+                << "  --quality-metrics           Record quality metrics without a reference checkpoint.\n"
+                << "  --timestep FLOAT            Override the simulation timestep for this run.\n"
+                << "  --stretch-stiffness FLOAT   Override cloth stretch stiffness for this run.\n"
+                << "  --bending-stiffness FLOAT   Override cloth bending stiffness for this run.\n"
+                << "  --cloth-dimension N         Override square cloth resolution for this run.\n"
+                << "  --cloth-width N             Override cloth grid width.\n"
+                << "  --cloth-height N            Override cloth grid height.\n"
+                << "  --batched-ls-k N            Set batched Armijo candidate count.\n"
+                << "  --armijo-beta FLOAT         Set Armijo backtracking factor in (0,1).\n"
+                << "  --ncg-restart-mode MODE     none | periodic | non-descent.\n"
+                << "  --ncg-restart-period N      Period for periodic NCG restart.\n"
+                << "  --verify-cs-gradient PATH  Export CPU/edge/gather gradient diagnostics and exit.\n"
+                << "  --scene PATH                Load a scene XML file relative to project root.\n"
+                << "  --capture-frame N           Capture rendered benchmark frame N.\n"
+                << "  --capture-output PATH       PNG output path for --capture-frame.\n"
+                << "  --capture-resolution W H    Render capture at a fixed size.\n"
+                << "  --render-resolution W H     Render benchmarks at a fixed viewport.\n"
+				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
+				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
+				<< "                              gpu-gather-fusion-batched-ls-persistent | gpu-xpbd-jacobi.\n"
+				<< "  --print-paths               Print resolved project/output/executable paths.\n"
 				<< "  --benchmark-swing-attachments\n"
 				<< "                              Move attachment constraints during benchmark.\n";
 			exit(EXIT_SUCCESS);
 		}
 	}
+
+    if (g_cli_capture_pending)
+    {
+        g_benchmark_mode = true;
+        g_benchmark_no_render = false;
+        g_benchmark_hide_window = false;
+    }
+}
+
+void maybe_capture_benchmark_frame(void)
+{
+    if (!g_cli_capture_pending || g_current_frame != g_cli_capture_frame + 1)
+    {
+        return;
+    }
+
+    std::string capture_path = g_cli_capture_output;
+    if (capture_path.empty())
+    {
+        char capture_name[64];
+        sprintf_s(capture_name, 64, "screenshots\\capture_frame_%06d.png", g_cli_capture_frame);
+        capture_path = capture_name;
+    }
+
+    capture_path = GenPDResolveOutputPath(capture_path);
+    GenPDEnsureDirectoryForFile(capture_path);
+    grab_screen(capture_path.c_str());
+    g_cli_capture_pending = false;
+    std::cout << "Captured benchmark frame " << g_cli_capture_frame
+        << ": " << capture_path << std::endl;
 }
 
 void maybe_finish_benchmark(void)
@@ -741,7 +1198,7 @@ void maybe_finish_benchmark(void)
 		}
 
 		std::cout << "Benchmark complete after " << g_current_frame
-			<< " frames. Profile: output/frame_profile.csv" << std::endl;
+			<< " frames. Profile: " << GenPDResolveOutputPath("frame_profile.csv") << std::endl;
 		cleanup();
 		exit(EXIT_SUCCESS);
 	}
@@ -968,6 +1425,33 @@ void mouse_over(int x, int y)
 	glutPostRedisplay();
 }
 
+void apply_cli_simulation_overrides()
+{
+	if (!g_mesh || !g_simulation)
+	{
+		return;
+	}
+
+	if (g_cli_cloth_dimension > 0)
+	{
+		g_mesh->m_dim[0] = static_cast<unsigned int>(g_cli_cloth_dimension);
+		g_mesh->m_dim[1] = static_cast<unsigned int>(g_cli_cloth_dimension);
+	}
+	if (g_cli_cloth_width > 0)
+	{
+		g_mesh->m_dim[0] = static_cast<unsigned int>(g_cli_cloth_width);
+	}
+	if (g_cli_cloth_height > 0)
+	{
+		g_mesh->m_dim[1] = static_cast<unsigned int>(g_cli_cloth_height);
+	}
+	if (g_cli_timestep > 0)
+	{
+		g_simulation->SetTimestep(g_cli_timestep);
+	}
+	g_simulation->SetExperimentMaterialStiffness(g_cli_stretch_stiffness, g_cli_bending_stiffness);
+}
+
 void init()
 {
     // glew init
@@ -985,6 +1469,10 @@ void init()
     // config init
     fprintf(stdout, "Initializing AntTweakBar...\n");
     g_config_bar = new AntTweakBarWrapper();
+if (g_benchmark_mode)
+{
+    g_config_bar->SetSaveSettingsOnDestroy(false);
+}
     g_config_bar->ChangeTwBarWindowSize(g_screen_width, g_screen_height);
 
 #ifdef ENABLE_MATLAB_DEBUGGING
@@ -1007,7 +1495,9 @@ void init()
 
     // scene init
     fprintf(stdout, "Initializing scene...\n");
-    g_scene = new Scene(DEFAULT_SCENE_FILE);
+    const std::string requested_scene = g_cli_scene.empty() ? std::string(DEFAULT_SCENE_FILE) : g_cli_scene;
+    const std::string scene_path = GenPDResolveProjectPath(requested_scene);
+    g_scene = new Scene(scene_path.c_str());
 
     // mesh init
     fprintf(stdout, "Initializing mesh...\n");
@@ -1049,7 +1539,11 @@ void cleanup() // clean up in a reverse order
 		delete g_debugger;
 	}
 #endif // ENABLE_MATLAB_DEBUGGING
-    if (g_config_bar)
+    if (g_cli_restore_iterations_per_frame && g_simulation)
+{
+    g_simulation->SetIterationsPerFrame(g_cli_original_iterations_per_frame);
+}
+if (g_config_bar)
     {
         delete g_config_bar;
     }
@@ -1090,7 +1584,10 @@ void TW_CALL reset_handle(void*)
 void TW_CALL reset_simulation(void*)
 {
 	// save current setting before reset
-	AntTweakBarWrapper::SaveSettings(g_config_bar);
+	if (!g_benchmark_mode)
+{
+    AntTweakBarWrapper::SaveSettings(g_config_bar);
+}
 
 	// reset frame#
 	g_current_frame = 0;
@@ -1108,6 +1605,7 @@ void TW_CALL reset_simulation(void*)
         break;
     }
 	g_config_bar->LoadSettings();
+	apply_cli_simulation_overrides();
     g_mesh->Reset();
 
     // reset simulation
@@ -1170,12 +1668,13 @@ void TW_CALL step_through(void*)
 
 void grab_screen(void)
 {
-    char anim_filename[256];
-    sprintf_s(anim_filename, 256, "output/Simulation%04d.png", g_current_frame);
-	grab_screen(anim_filename);
+	char anim_name[64];
+	sprintf_s(anim_name, 64, "Simulation%04d.png", g_current_frame);
+	const std::string anim_filename = GenPDResolveOutputPath(anim_name);
+	grab_screen(anim_filename.c_str());
 }
 
-void grab_screen(char* filename)
+void grab_screen(const char* filename)
 {
 	unsigned char* bitmapData = new unsigned char[3 * g_screen_width * g_screen_height];
 
@@ -1185,6 +1684,7 @@ void grab_screen(char* filename)
             bitmapData + (g_screen_width * 3 * ((g_screen_height - 1) - i)));
     }
 
+	GenPDEnsureDirectoryForFile(filename);
     stbi_write_png(filename, g_screen_width, g_screen_height, 3, bitmapData, g_screen_width * 3);
 
     delete [] bitmapData;
