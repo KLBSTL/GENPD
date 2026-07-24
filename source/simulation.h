@@ -465,14 +465,14 @@ unsigned int m_quality_checkpoint_stride;
 	bool use_cs = true;
 	GLuint gradient_shader, gradient_scatter_shader, gradient_finalize_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
-		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader;
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader, adaptive_ls_reset_shader;
 
 	GLuint gradient_program, gradient_scatter_program, gradient_finalize_program, energy_program, computeX_program, descent_program, iner_program,
-		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program;
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program, adaptive_ls_reset_program;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
 	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
-	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID;
+	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID, adaptiveLineSearchStateID;
 	bool m_cs_render_position_valid;
 	bool m_cs_gpu_state_valid;
 	bool m_cs_cpu_state_stale;
@@ -489,6 +489,8 @@ unsigned int m_quality_checkpoint_stride;
 	ScalarType m_cs_gradient_dot_descent;
 	unsigned int m_cs_ncg_restart_count;
 	bool m_cs_edge_buffer_dirty;
+	std::size_t m_cs_adaptive_ls_state_buffer_bytes;
+	unsigned int m_cs_adaptive_ls_history_generation;
 
 	bool li_test = true;
 	
@@ -1148,6 +1150,7 @@ void main() {
 	std::string m_cs2_state_shader_file;
 std::string m_xpbd_constraints_shader_file;
 std::string m_xpbd_apply_shader_file;
+std::string m_adaptive_ls_reset_shader_file;
 
 
 	VectorX gradient_dir;
@@ -1193,6 +1196,8 @@ private:
 	bool finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite);
 	void syncCS2GpuStateToCPU();
 	void invalidateCS2GpuState();
+	void ensureAdaptiveLineSearchState();
+	void resetAdaptiveLineSearchState();
 	void dispatchCSGradient(bool pure_constraint_only, bool profile_gradient = true);
 	void updateCSStats(bool readback = true);
 	ScalarType readCSStatsFromGPU(bool profile_readback = true);

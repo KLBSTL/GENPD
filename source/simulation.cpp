@@ -32,6 +32,7 @@
 #include <omp.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -142,6 +143,23 @@ struct CSLineSearchResultGPU
 		float step;
 		float accepted_energy;
 	};
+
+	struct alignas(16) CSAdaptiveLineSearchStateGPU
+	{
+		float previous_accepted_step;
+		float current_batch_base;
+		unsigned int history_valid;
+		unsigned int previous_index;
+
+		unsigned int fallback_batches;
+		unsigned int candidate_evals;
+		unsigned int history_generation;
+		unsigned int reserved;
+	};
+
+	static_assert(sizeof(CSAdaptiveLineSearchStateGPU) == 32, "adaptive LS GPU layout mismatch");
+	static_assert(offsetof(CSAdaptiveLineSearchStateGPU, previous_accepted_step) == 0, "adaptive LS layout mismatch");
+	static_assert(offsetof(CSAdaptiveLineSearchStateGPU, fallback_batches) == 16, "adaptive LS layout mismatch");
 
 	bool VectorIsFinite(const VectorX& x)
 	{
@@ -662,6 +680,8 @@ m_quality_checkpoint_stride = 1;
 	m_ncg_restart_mode = NCG_RESTART_NON_DESCENT;
 	m_ncg_restart_period = 0u;
 	m_cs_edge_buffer_dirty = true;
+	m_cs_adaptive_ls_state_buffer_bytes = 0;
+	m_cs_adaptive_ls_history_generation = 0u;
 	m_cs_render_position_valid = false;
 	m_cs_gpu_state_valid = false;
 	m_cs_cpu_state_stale = false;
@@ -683,6 +703,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs2_state_shader_file = "./shaders/cs2State.comp";
 	m_xpbd_constraints_shader_file = "./shaders/xpbd_constraints.comp";
 	m_xpbd_apply_shader_file = "./shaders/xpbd_apply.comp";
+	m_adaptive_ls_reset_shader_file = "./shaders/adaptive_ls_reset.comp";
 
 
 	use_cs = true;
@@ -713,6 +734,9 @@ m_quality_checkpoint_stride = 1;
 		glGenBuffers(1, &csStateStatsID);
 		glGenBuffers(1, &xpbdDeltaID);
 		glGenBuffers(1, &xpbdLambdaID);
+		glGenBuffers(1, &adaptiveLineSearchStateID);
+		ensureAdaptiveLineSearchState();
+		resetAdaptiveLineSearchState();
 
 	}
 
@@ -801,6 +825,7 @@ void Simulation::set_shader()
 	compile_compute_program(cs2_state_shader, cs2_state_program, load_shader_source(m_cs2_state_shader_file, ""), "CS2 GPU state compute shader");
 	compile_compute_program(xpbd_constraints_shader, xpbd_constraints_program, load_shader_source(m_xpbd_constraints_shader_file, ""), "XPBD constraint compute shader");
 	compile_compute_program(xpbd_apply_shader, xpbd_apply_program, load_shader_source(m_xpbd_apply_shader_file, ""), "XPBD apply compute shader");
+	compile_compute_program(adaptive_ls_reset_shader, adaptive_ls_reset_program, load_shader_source(m_adaptive_ls_reset_shader_file, ""), "adaptive line-search reset compute shader");
 }
 
 void Simulation::Create_SSBO()
@@ -1984,6 +2009,40 @@ void Simulation::invalidateCS2GpuState()
 	m_cs_skip_cpu_damping_once = false;
 	m_cs_render_position_valid = false;
 }
+
+void Simulation::ensureAdaptiveLineSearchState()
+{
+	if (!use_cs || adaptiveLineSearchStateID == 0)
+	{
+		return;
+	}
+
+	EnsureCSBufferStorage(
+		adaptiveLineSearchStateID,
+		sizeof(CSAdaptiveLineSearchStateGPU),
+		m_cs_adaptive_ls_state_buffer_bytes);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, adaptiveLineSearchStateID);
+}
+
+void Simulation::resetAdaptiveLineSearchState()
+{
+	ensureAdaptiveLineSearchState();
+	if (adaptive_ls_reset_program == 0 || adaptiveLineSearchStateID == 0)
+	{
+		return;
+	}
+
+	glUseProgram(adaptive_ls_reset_program);
+	static GLint reset_generation_location = -1;
+	if (reset_generation_location < 0)
+	{
+		reset_generation_location = glGetUniformLocation(adaptive_ls_reset_program, "reset_generation");
+	}
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, adaptiveLineSearchStateID);
+	glUniform1ui(reset_generation_location, m_cs_adaptive_ls_history_generation);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+}
 Simulation::~Simulation()
 {
 	clearConstraints();
@@ -2039,6 +2098,9 @@ Simulation::~Simulation()
 	glDeleteShader(xpbd_apply_shader);
 	glDeleteProgram(xpbd_apply_program);
 
+	glDeleteShader(adaptive_ls_reset_shader);
+	glDeleteProgram(adaptive_ls_reset_program);
+
 	glDeleteShader(descent_shader);
 	glDeleteProgram(descent_program);
 
@@ -2066,6 +2128,7 @@ Simulation::~Simulation()
 	glDeleteBuffers(1, &csStateStatsID);
 	glDeleteBuffers(1, &xpbdDeltaID);
 	glDeleteBuffers(1, &xpbdLambdaID);
+	glDeleteBuffers(1, &adaptiveLineSearchStateID);
 	if (pUBO != 0)
 	{
 		glDeleteBuffers(1, &pUBO);
@@ -2132,6 +2195,7 @@ void Simulation::Reset()
 		m_cs_edge_buffer_dirty = true;
 		invalidateCS2GpuState();
 		uploadCSResourcesIfNeeded();
+		resetAdaptiveLineSearchState();
 	}
 
 	m_selected_attachment_constraint = NULL;

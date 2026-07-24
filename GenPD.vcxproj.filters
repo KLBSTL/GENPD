@@ -69,6 +69,9 @@
     <Filter Include="Source Files\math\tensor">
       <UniqueIdentifier>{47262523-496f-4ac4-a333-c1dfa8dda8cc}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Shader Files">
+      <UniqueIdentifier>{f24ccda4-0ae8-4e74-a20f-c1b2f3db3f4b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="source\main.cpp">
@@ -267,5 +270,10 @@
     <Natvis Include="Natvis\EigenVis.natvis">
       <Filter>Resource Files</Filter>
     </Natvis>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\adaptive_ls_reset.comp">
+      <Filter>Shader Files</Filter>
+    </None>
   </ItemGroup>
 </Project>
