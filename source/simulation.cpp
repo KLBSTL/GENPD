@@ -117,6 +117,10 @@ namespace
 	unsigned int g_cs_profile_persistent_collision_dispatches = 0;
 	unsigned int g_cs_profile_host_readbacks = 0;
 	unsigned int g_cs_profile_solver_finish_calls = 0;
+	std::size_t g_cs_profile_state_h2d_bytes = 0;
+	std::size_t g_cs_profile_state_d2h_bytes = 0;
+	unsigned int g_cs_profile_state_upload_calls = 0;
+	unsigned int g_cs_profile_state_readback_calls = 0;
 	unsigned int g_cs_unit_step_shortcut_budget = 0;
 	bool g_cs_prefetched_energy_valid = false;
 	std::size_t g_cs_gradient_buffer_bytes = 0;
@@ -578,6 +582,10 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_persistent_collision_dispatches = 0;
 		g_cs_profile_host_readbacks = 0;
 		g_cs_profile_solver_finish_calls = 0;
+		g_cs_profile_state_h2d_bytes = 0;
+		g_cs_profile_state_d2h_bytes = 0;
+		g_cs_profile_state_upload_calls = 0;
+		g_cs_profile_state_readback_calls = 0;
 		g_cs_prefetched_energy_valid = false;
 	}
 
@@ -1943,11 +1951,15 @@ void Simulation::initializeCS2GpuStateIfNeeded()
 	EnsureCSBufferStorage(csPositionID, vector_buffer_bytes, g_cs_state_position_buffer_bytes);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, csPositionID);
 	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_positions.data());
+	++g_cs_profile_state_upload_calls;
+	g_cs_profile_state_h2d_bytes += vector_buffer_bytes;
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 18, csPositionID);
 
 	EnsureCSBufferStorage(collisionVelocityID, vector_buffer_bytes, g_cs_collision_velocity_buffer_bytes);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, collisionVelocityID);
 	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_velocities.data());
+	++g_cs_profile_state_upload_calls;
+	g_cs_profile_state_h2d_bytes += vector_buffer_bytes;
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -2123,8 +2135,12 @@ void Simulation::syncCS2GpuStateToCPU()
 	// Position and velocity each require a CPU-visible buffer readback.
 	++g_cs_profile_host_readbacks;
 	++g_cs_profile_host_readbacks;
+	++g_cs_profile_state_readback_calls;
+	g_cs_profile_state_d2h_bytes += vector_buffer_bytes;
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_positions.data());
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, collisionVelocityID);
+	++g_cs_profile_state_readback_calls;
+	g_cs_profile_state_d2h_bytes += vector_buffer_bytes;
 	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_buffer_bytes, m_mesh->m_current_velocities.data());
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
@@ -2680,7 +2696,7 @@ GenPDEnsureDirectoryForFile(experiment_profile_path);
 experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2813,6 +2829,10 @@ if (experiment_profile_file.is_open())
 			<< g_cs_profile_skipped_linesearch_calls << ","
 			<< g_cs_profile_host_readbacks << ","
 			<< g_cs_profile_solver_finish_calls << ","
+			<< g_cs_profile_state_h2d_bytes << ","
+			<< g_cs_profile_state_d2h_bytes << ","
+			<< g_cs_profile_state_upload_calls << ","
+			<< g_cs_profile_state_readback_calls << ","
 			<< CurrentCSProfileBufferBytes(test_) << ","
 			<< g_cs_gradient_buffer_bytes << ","
 			<< g_cs_descent_buffer_bytes << ","
