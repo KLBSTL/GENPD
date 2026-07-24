@@ -35,6 +35,18 @@ layout(std430,binding = 6) buffer Result {
     float accepted_energy;
 };
 
+layout(std430, binding = 23) buffer AdaptiveLineSearchState {
+    float previous_accepted_step;
+    float current_batch_base;
+    uint history_valid;
+    uint previous_index;
+
+    uint fallback_batches;
+    uint candidate_evals;
+    uint history_generation;
+    uint reserved;
+};
+
 uniform float currentEnergy;
 uniform float grad_dot_d;
 uniform int use_gpu_line_search_state;
@@ -46,6 +58,8 @@ uniform uint dispatch_partial_count;
 uniform uint shortcut_budget_on_accept;
 uniform int gpu_candidate_count;
 uniform float gpu_first_step;
+uniform int adaptive_history_enabled;
+uniform int adaptive_final_batch;
 
 void write_indirect(uint group_count_x) {
     control[0] = group_count_x;
@@ -91,7 +105,7 @@ void main() {
     }
     accepted_energy = base_energy;
 
-    float candidate_step = first_step;
+    float candidate_step = (adaptive_history_enabled != 0) ? current_batch_base : first_step;
     for (int i = 0; i < candidate_count; ++i) {
         float candidate_energy = energy[energy_offset + i];
         float rhs = base_energy + alpha * candidate_step * gradient_dot_descent;
@@ -106,9 +120,33 @@ void main() {
             if (write_fallback_dispatch != 0) {
                 write_indirect(0u);
             }
+            if (adaptive_history_enabled != 0) {
+                previous_accepted_step = candidate_step;
+                current_batch_base = min(1.0, candidate_step / beta);
+                history_valid = 1u;
+                previous_index = uint(i);
+                candidate_evals += uint(candidate_count);
+            }
             return;
         }
         candidate_step *= beta;
+    }
+
+    if (adaptive_history_enabled != 0) {
+        candidate_evals += uint(candidate_count);
+        if (adaptive_final_batch == 0) {
+            float fallback_base = current_batch_base;
+            for (int i = 0; i < candidate_count; ++i) {
+                fallback_base *= beta;
+            }
+            current_batch_base = fallback_base;
+            fallback_batches += 1u;
+        } else {
+            previous_accepted_step = 1.0;
+            current_batch_base = 1.0;
+            history_valid = 0u;
+            previous_index = 0u;
+        }
     }
 
     // A rejected Armijo search must not silently advance the iterate.

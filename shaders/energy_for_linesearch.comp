@@ -57,6 +57,18 @@ layout(std430, binding = 13) readonly buffer MassDiagBuffer {
     float mass_diag[];
 };
 
+layout(std430, binding = 23) readonly buffer AdaptiveLineSearchState {
+    float previous_accepted_step;
+    float current_batch_base;
+    uint history_valid;
+    uint previous_index;
+
+    uint fallback_batches;
+    uint candidate_evals;
+    uint history_generation;
+    uint reserved;
+};
+
 shared vec2 partial_energy[256];
 shared float shared_candidate_step;
 
@@ -70,6 +82,14 @@ float compute_candidate_step(uint candidate_index) {
 
     if (gpu_line_search_mode == 2) {
         float t = beta;
+        for (uint i = 0u; i < candidate_index; ++i) {
+            t *= beta;
+        }
+        return t;
+    }
+
+    if (gpu_line_search_mode == 3) {
+        float t = current_batch_base;
         for (uint i = 0u; i < candidate_index; ++i) {
             t *= beta;
         }

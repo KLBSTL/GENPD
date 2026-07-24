@@ -3,7 +3,7 @@ param(
     [string]$RunLabel = ('benchmark-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [int]$Frames = 300,
     [int]$Warmup = 30,
-    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-xpbd-jacobi')]
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [int]$IterationsPerFrame = 0,
     [string]$ReferenceExportDir = '',
@@ -13,6 +13,8 @@ param(
     [string]$OutputDir = '',
     [string]$ExePath = '',
     [switch]$ProfileGpuQueries,
+    [ValidateSet('none', 'iteration', 'frame')]
+    [string]$AdaptiveLsHistory = 'frame',
     [switch]$ForceCpuStateRoundtrip,
     [switch]$SyncGpu,
     [switch]$DisableVsync,
@@ -111,8 +113,8 @@ if ($CaptureFrame -ge 0) {
 if ($NoRender -and $RunLabel -match '^paper-') {
     throw 'Paper-labelled runs must use rendered measurements; --no-render is reserved for diagnostics and short regressions.'
 }
-if ($ForceCpuStateRoundtrip -and $SolverVariant -ne 'gpu-gather-fusion-batched-ls-persistent') {
-    throw 'ForceCpuStateRoundtrip is defined only for gpu-gather-fusion-batched-ls-persistent.'
+if ($ForceCpuStateRoundtrip -and $SolverVariant -notin @('gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent')) {
+    throw 'ForceCpuStateRoundtrip is defined only for persistent gather-fusion NCG variants.'
 }
 if ($ForceCpuStateRoundtrip -and $RunLabel -match '^paper-') {
     throw 'ForceCpuStateRoundtrip is a diagnostic counterfactual and cannot use a paper-labelled run label.'
@@ -127,6 +129,7 @@ $appArgs = @(
     '--output-dir', $OutputDir,
     '--run-label', $RunLabel,
     '--solver-variant', $SolverVariant,
+    '--adaptive-ls-history', $AdaptiveLsHistory,
     '--frames', $Frames,
     '--warmup', $Warmup
 )
@@ -181,8 +184,11 @@ try {
         Get-Content -LiteralPath $logPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
         Get-Content -LiteralPath $stderrPath -Tail 80 -ErrorAction SilentlyContinue | Write-Host
         if ($null -eq $exitCode) {
-            $requiredArtifacts = @('frame_profile.csv', 'frame_profile_experiment.csv', 'frame_presentation.csv', 'run_metadata.json') |
-                ForEach-Object { Join-Path $OutputDir $_ }
+            $requiredArtifactNames = @('frame_profile.csv', 'frame_profile_experiment.csv', 'run_metadata.json')
+            if (-not $NoRender -and -not $Headless) {
+                $requiredArtifactNames += 'frame_presentation.csv'
+            }
+            $requiredArtifacts = $requiredArtifactNames | ForEach-Object { Join-Path $OutputDir $_ }
             $missingArtifacts = @($requiredArtifacts | Where-Object { -not (Test-Path -LiteralPath $_) })
             if ($missingArtifacts.Count -gt 0) {
                 throw "Benchmark process ended without an observable exit code and did not produce: $($missingArtifacts -join ', ')"
@@ -201,7 +207,9 @@ if ($exitCode -ne 0) {
 
 Write-Host "Profile CSV: $(Join-Path $OutputDir 'frame_profile.csv')"
 Write-Host "Experiment profile CSV: $(Join-Path $OutputDir 'frame_profile_experiment.csv')"
-Write-Host "Presentation profile CSV: $(Join-Path $OutputDir 'frame_presentation.csv')"
+if (-not $NoRender -and -not $Headless) {
+    Write-Host "Presentation profile CSV: $(Join-Path $OutputDir 'frame_presentation.csv')"
+}
 Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"
 if ($QualityMetrics -or $ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
     Write-Host "Quality metrics: $(Join-Path $OutputDir 'quality_metrics.csv')"

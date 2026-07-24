@@ -32,6 +32,7 @@
 #include <omp.h>
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <fstream>
 #include <iterator>
@@ -99,6 +100,12 @@ namespace
 	unsigned int g_cs_profile_armijo_fallbacks = 0;
 	unsigned int g_cs_profile_accepted_candidate_sum = 0;
 	unsigned int g_cs_profile_accepted_candidate_count = 0;
+	unsigned int g_cs_profile_adaptive_history_uses = 0;
+	unsigned int g_cs_profile_adaptive_history_resets = 0;
+	unsigned int g_cs_profile_adaptive_first_batch_accepts = 0;
+	unsigned int g_cs_profile_adaptive_second_batch_accepts = 0;
+	unsigned int g_cs_profile_adaptive_candidate_evaluations = 0;
+	unsigned int g_cs_profile_adaptive_batch_count = 0;
 	unsigned int g_cs_profile_gradient_dispatches = 0;
 	unsigned int g_cs_profile_stats_dispatches = 0;
 	unsigned int g_cs_profile_reduction_dispatches = 0;
@@ -142,6 +149,23 @@ struct CSLineSearchResultGPU
 		float step;
 		float accepted_energy;
 	};
+
+	struct alignas(16) CSAdaptiveLineSearchStateGPU
+	{
+		float previous_accepted_step;
+		float current_batch_base;
+		unsigned int history_valid;
+		unsigned int previous_index;
+
+		unsigned int fallback_batches;
+		unsigned int candidate_evals;
+		unsigned int history_generation;
+		unsigned int reserved;
+	};
+
+	static_assert(sizeof(CSAdaptiveLineSearchStateGPU) == 32, "adaptive LS GPU layout mismatch");
+	static_assert(offsetof(CSAdaptiveLineSearchStateGPU, previous_accepted_step) == 0, "adaptive LS layout mismatch");
+	static_assert(offsetof(CSAdaptiveLineSearchStateGPU, fallback_batches) == 16, "adaptive LS layout mismatch");
 
 	bool VectorIsFinite(const VectorX& x)
 	{
@@ -498,6 +522,26 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		return std::isfinite(result.step) && std::isfinite(result.accepted_energy);
 	}
 
+	bool ReadCSAdaptiveLineSearchState(GLuint buffer, CSAdaptiveLineSearchStateGPU& state)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(state), &state);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		++g_cs_profile_host_readbacks;
+		return std::isfinite(state.previous_accepted_step) && std::isfinite(state.current_batch_base);
+	}
+
+	const char* AdaptiveLineSearchHistoryModeName(AdaptiveLineSearchHistoryMode mode)
+	{
+		switch (mode)
+		{
+		case ADAPTIVE_LS_HISTORY_NONE: return "none";
+		case ADAPTIVE_LS_HISTORY_ITERATION: return "iteration";
+		case ADAPTIVE_LS_HISTORY_FRAME: return "frame";
+		default: return "unknown";
+		}
+	}
+
 	void ResetCSNCGProfileMetrics()
 	{
 		g_cs_profile_linesearch_ms = 0.0;
@@ -517,6 +561,12 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 			g_cs_profile_armijo_fallbacks = 0;
 			g_cs_profile_accepted_candidate_sum = 0;
 			g_cs_profile_accepted_candidate_count = 0;
+		g_cs_profile_adaptive_history_uses = 0;
+		g_cs_profile_adaptive_history_resets = 0;
+		g_cs_profile_adaptive_first_batch_accepts = 0;
+		g_cs_profile_adaptive_second_batch_accepts = 0;
+		g_cs_profile_adaptive_candidate_evaluations = 0;
+		g_cs_profile_adaptive_batch_count = 0;
 		g_cs_profile_gradient_dispatches = 0;
 		g_cs_profile_stats_dispatches = 0;
 		g_cs_profile_reduction_dispatches = 0;
@@ -659,9 +709,13 @@ m_quality_checkpoint_stride = 1;
 	m_cs_gradient_dot_descent = 0.0;
 	m_cs_ncg_restart_count = 0;
 	m_batched_ls_k = 8u;
+	m_adaptive_ls_history_mode = ADAPTIVE_LS_HISTORY_FRAME;
+	m_adaptive_ls_was_active = false;
 	m_ncg_restart_mode = NCG_RESTART_NON_DESCENT;
 	m_ncg_restart_period = 0u;
 	m_cs_edge_buffer_dirty = true;
+	m_cs_adaptive_ls_state_buffer_bytes = 0;
+	m_cs_adaptive_ls_history_generation = 0u;
 	m_cs_render_position_valid = false;
 	m_cs_gpu_state_valid = false;
 	m_cs_cpu_state_stale = false;
@@ -683,6 +737,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs2_state_shader_file = "./shaders/cs2State.comp";
 	m_xpbd_constraints_shader_file = "./shaders/xpbd_constraints.comp";
 	m_xpbd_apply_shader_file = "./shaders/xpbd_apply.comp";
+	m_adaptive_ls_reset_shader_file = "./shaders/adaptive_ls_reset.comp";
 
 
 	use_cs = true;
@@ -713,6 +768,9 @@ m_quality_checkpoint_stride = 1;
 		glGenBuffers(1, &csStateStatsID);
 		glGenBuffers(1, &xpbdDeltaID);
 		glGenBuffers(1, &xpbdLambdaID);
+		glGenBuffers(1, &adaptiveLineSearchStateID);
+		ensureAdaptiveLineSearchState();
+		resetAdaptiveLineSearchState();
 
 	}
 
@@ -801,6 +859,7 @@ void Simulation::set_shader()
 	compile_compute_program(cs2_state_shader, cs2_state_program, load_shader_source(m_cs2_state_shader_file, ""), "CS2 GPU state compute shader");
 	compile_compute_program(xpbd_constraints_shader, xpbd_constraints_program, load_shader_source(m_xpbd_constraints_shader_file, ""), "XPBD constraint compute shader");
 	compile_compute_program(xpbd_apply_shader, xpbd_apply_program, load_shader_source(m_xpbd_apply_shader_file, ""), "XPBD apply compute shader");
+	compile_compute_program(adaptive_ls_reset_shader, adaptive_ls_reset_program, load_shader_source(m_adaptive_ls_reset_shader_file, ""), "adaptive line-search reset compute shader");
 }
 
 void Simulation::Create_SSBO()
@@ -1984,6 +2043,49 @@ void Simulation::invalidateCS2GpuState()
 	m_cs_skip_cpu_damping_once = false;
 	m_cs_render_position_valid = false;
 }
+
+void Simulation::ensureAdaptiveLineSearchState()
+{
+	if (!use_cs || adaptiveLineSearchStateID == 0)
+	{
+		return;
+	}
+
+	EnsureCSBufferStorage(
+		adaptiveLineSearchStateID,
+		sizeof(CSAdaptiveLineSearchStateGPU),
+		m_cs_adaptive_ls_state_buffer_bytes);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, adaptiveLineSearchStateID);
+}
+
+void Simulation::resetAdaptiveLineSearchState()
+{
+	if (!use_cs)
+	{
+		return;
+	}
+	++m_cs_adaptive_ls_history_generation;
+	if (GenPDExperimentUsesAdaptiveLineSearch())
+	{
+		++g_cs_profile_adaptive_history_resets;
+	}
+	ensureAdaptiveLineSearchState();
+	if (adaptive_ls_reset_program == 0 || adaptiveLineSearchStateID == 0)
+	{
+		return;
+	}
+
+	glUseProgram(adaptive_ls_reset_program);
+	static GLint reset_generation_location = -1;
+	if (reset_generation_location < 0)
+	{
+		reset_generation_location = glGetUniformLocation(adaptive_ls_reset_program, "reset_generation");
+	}
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, adaptiveLineSearchStateID);
+	glUniform1ui(reset_generation_location, m_cs_adaptive_ls_history_generation);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+}
 Simulation::~Simulation()
 {
 	clearConstraints();
@@ -2039,6 +2141,9 @@ Simulation::~Simulation()
 	glDeleteShader(xpbd_apply_shader);
 	glDeleteProgram(xpbd_apply_program);
 
+	glDeleteShader(adaptive_ls_reset_shader);
+	glDeleteProgram(adaptive_ls_reset_program);
+
 	glDeleteShader(descent_shader);
 	glDeleteProgram(descent_program);
 
@@ -2066,6 +2171,7 @@ Simulation::~Simulation()
 	glDeleteBuffers(1, &csStateStatsID);
 	glDeleteBuffers(1, &xpbdDeltaID);
 	glDeleteBuffers(1, &xpbdLambdaID);
+	glDeleteBuffers(1, &adaptiveLineSearchStateID);
 	if (pUBO != 0)
 	{
 		glDeleteBuffers(1, &pUBO);
@@ -2132,6 +2238,7 @@ void Simulation::Reset()
 		m_cs_edge_buffer_dirty = true;
 		invalidateCS2GpuState();
 		uploadCSResourcesIfNeeded();
+		resetAdaptiveLineSearchState();
 	}
 
 	m_selected_attachment_constraint = NULL;
@@ -2336,6 +2443,54 @@ void Simulation::ConfigureQualityMetrics(const std::string& reference_export_dir
     }
 }
 
+void Simulation::SetTimestep(ScalarType timestep)
+{
+	if (timestep <= 0.0 || timestep == m_h)
+	{
+		return;
+	}
+	m_h = timestep;
+	if (use_cs && m_mesh)
+	{
+		syncCSParams();
+		resetAdaptiveLineSearchState();
+	}
+}
+
+void Simulation::SetExperimentMaterialStiffness(ScalarType stretch, ScalarType bending)
+{
+	bool changed = false;
+	if (stretch > 0.0 && stretch != m_stiffness_stretch)
+	{
+		m_stiffness_stretch = stretch;
+		changed = true;
+	}
+	if (bending > 0.0 && bending != m_stiffness_bending)
+	{
+		m_stiffness_bending = bending;
+		changed = true;
+	}
+	if (m_stiffness_auto_laplacian_stiffness)
+	{
+		m_stiffness_laplacian = 2 * m_stiffness_stretch + m_stiffness_bending;
+	}
+	if (changed && use_cs && m_mesh)
+	{
+		syncCSParams();
+		resetAdaptiveLineSearchState();
+	}
+}
+
+void Simulation::SetAdaptiveLineSearchHistoryMode(AdaptiveLineSearchHistoryMode mode)
+{
+	if (m_adaptive_ls_history_mode == mode)
+	{
+		return;
+	}
+	m_adaptive_ls_history_mode = mode;
+	resetAdaptiveLineSearchState();
+}
+
 void Simulation::SetBatchedLineSearchK(unsigned int candidate_count)
 {
 	m_batched_ls_k = std::max(1u, candidate_count);
@@ -2389,6 +2544,7 @@ void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, Sca
 	static std::ofstream profile_file;
 	static std::ofstream extended_profile_file;
 	static std::ofstream experiment_profile_file;
+static std::ofstream line_search_trace_file;
 static std::ofstream quality_profile_file;
 	if (!initialized)
 	{
@@ -2406,13 +2562,24 @@ static std::ofstream quality_profile_file;
 		extended_profile_file.open(extended_profile_path.c_str(), std::ios::out | std::ios::trunc);
 		if (extended_profile_file.is_open())
 		{
-			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,gradient_dot_descent,gradient_norm_sampled,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled\n";
+			extended_profile_file << "frame,frame_valid,termination_reason,converged,exploded,iterations,gradient_norm,gradient_dot_descent,gradient_norm_sampled,max_position,objective_energy,cs_full_ls,cs_skip_ls,cs_unit_accepts,ncg_restarts,armijo_rejections,armijo_failures,armijo_fallbacks,accepted_candidate_sum,accepted_candidate_count,line_search_decisions_profiled,adaptive_history_uses,adaptive_history_resets,adaptive_first_batch_accepts,adaptive_second_batch_accepts,adaptive_candidate_evaluations,adaptive_batch_count\n";
 			extended_profile_file.flush();
 		}
-		const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
-		GenPDEnsureDirectoryForFile(experiment_profile_path);
-		experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
-		if (experiment_profile_file.is_open())
+		if (m_profile_line_search_decisions)
+{
+const std::string trace_path = GenPDResolveOutputPath("line_search_trace.csv");
+GenPDEnsureDirectoryForFile(trace_path);
+line_search_trace_file.open(trace_path.c_str(), std::ios::out | std::ios::trunc);
+if (line_search_trace_file.is_open())
+{
+line_search_trace_file << "frame,iteration,solver_variant,history_mode,history_valid_before,batch_id,base_step,candidate_count,beta,accepted,chosen_i,accepted_step,accepted_energy,candidate_evaluations,fallback\n";
+line_search_trace_file.flush();
+}
+}
+const std::string experiment_profile_path = GenPDResolveOutputPath("frame_profile_experiment.csv");
+GenPDEnsureDirectoryForFile(experiment_profile_path);
+experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
+if (experiment_profile_file.is_open())
 		{
 			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
 			experiment_profile_file.flush();
@@ -2499,11 +2666,40 @@ initialized = true;
 			<< g_cs_profile_armijo_fallbacks << ","
 			<< g_cs_profile_accepted_candidate_sum << ","
 			<< g_cs_profile_accepted_candidate_count << ","
-			<< (m_profile_line_search_decisions ? 1 : 0) << "\n";
+			<< (m_profile_line_search_decisions ? 1 : 0) << ","
+<< g_cs_profile_adaptive_history_uses << ","
+<< g_cs_profile_adaptive_history_resets << ","
+<< g_cs_profile_adaptive_first_batch_accepts << ","
+<< g_cs_profile_adaptive_second_batch_accepts << ","
+<< g_cs_profile_adaptive_candidate_evaluations << ","
+<< g_cs_profile_adaptive_batch_count << "\n";
 		extended_profile_file.flush();
 	}
 
-	if (experiment_profile_file.is_open())
+	if (line_search_trace_file.is_open())
+{
+for (std::vector<AdaptiveLineSearchTraceRecord>::const_iterator it = m_adaptive_ls_trace_records.begin(); it != m_adaptive_ls_trace_records.end(); ++it)
+{
+line_search_trace_file << frame << ","
+<< it->iteration << ","
+<< GenPDExperimentVariantName() << ","
+<< AdaptiveLineSearchHistoryModeName(m_adaptive_ls_history_mode) << ","
+<< it->history_valid_before << ","
+<< it->batch_id << ","
+<< it->base_step << ","
+<< it->candidate_count << ","
+<< it->beta << ","
+<< it->accepted << ","
+<< it->chosen_i << ","
+<< it->accepted_step << ","
+<< it->accepted_energy << ","
+<< it->candidate_evaluations << ","
+<< it->fallback << "\n";
+}
+line_search_trace_file.flush();
+}
+m_adaptive_ls_trace_records.clear();
+if (experiment_profile_file.is_open())
 	{
 		experiment_profile_file << frame << ","
 			<< GenPDExperimentVariantName() << ","
@@ -4056,6 +4252,7 @@ void Simulation::integrateImplicitMethod()
 	m_last_profile_termination_reason = "none";
 	m_last_profile_ncg_restarts = 0;
 	m_cs_ncg_restart_count = 0;
+	const bool adaptive_line_search_active = use_cs_ncg && GenPDExperimentUsesAdaptiveLineSearch();
 	// take a initial guess
 	VectorX x = m_y;
 	//VectorX x = m_mesh->m_current_positions;
@@ -4156,6 +4353,13 @@ void Simulation::integrateImplicitMethod()
 
 	m_ls_is_first_iteration = true;
 	ResetCSNCGProfileMetrics();
+	m_adaptive_ls_trace_records.clear();
+	if ((m_adaptive_ls_was_active && !adaptive_line_search_active)
+		|| (adaptive_line_search_active && (m_adaptive_ls_history_mode == ADAPTIVE_LS_HISTORY_ITERATION || m_cs_edge_buffer_dirty)))
+	{
+		resetAdaptiveLineSearchState();
+	}
+	m_adaptive_ls_was_active = adaptive_line_search_active;
 
 	myti.Toc();
 
@@ -4412,6 +4616,10 @@ void Simulation::integrateImplicitMethod()
 		m_last_profile_termination_reason = (!x_is_finite || !cs_stats_finite)
 			? "nonfinite"
 			: "max_position";
+		if (adaptive_line_search_active)
+		{
+			resetAdaptiveLineSearchState();
+		}
 		g_cs_unit_step_shortcut_budget = 0;
 		g_cs_prefetched_energy_valid = false;
 		x = m_mesh->m_current_positions;
@@ -6451,7 +6659,246 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		gpu_line_search_mode_location = glGetUniformLocation(energy_for_linesearch_program, "gpu_line_search_mode");
 	}
 
-	if (gpu_resident_line_search)
+	if (gpu_resident_line_search && GenPDExperimentUsesAdaptiveLineSearch())
+{
+    if (m_adaptive_ls_history_mode == ADAPTIVE_LS_HISTORY_NONE)
+    {
+        resetAdaptiveLineSearchState();
+    }
+    const GLuint candidate_count = std::max(1u, m_batched_ls_k);
+    const GLuint partial_group_count = std::max(inertia_partial_group_count, energy_partial_group_count);
+    const bool trace_decisions = m_profile_line_search_decisions;
+    EnsureFloatScratchBuffer(testID, test_, static_cast<std::size_t>(candidate_count) * partial_group_count);
+    EnsureCSBufferStorage(energyID, static_cast<std::size_t>(candidate_count + 1u) * sizeof(ScalarType), g_cs_energy_buffer_bytes);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, FlagID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, ResultID);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 14, fixededgesID);
+    ensureAdaptiveLineSearchState();
+
+    CSAdaptiveLineSearchStateGPU state_before = {};
+    if (trace_decisions)
+    {
+        if (!ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, state_before))
+        {
+            throw std::runtime_error("Adaptive Armijo history state was non-finite.");
+        }
+        if (state_before.history_valid != 0u)
+        {
+            ++g_cs_profile_adaptive_history_uses;
+        }
+    }
+
+    ++g_cs_profile_full_linesearch_calls;
+
+    static GLint adaptive_include_current_candidate_location = -1;
+    static GLint adaptive_gpu_line_search_mode_location = -1;
+    if (adaptive_include_current_candidate_location < 0)
+    {
+        adaptive_include_current_candidate_location = glGetUniformLocation(energy_for_linesearch_program, "include_current_candidate");
+        adaptive_gpu_line_search_mode_location = glGetUniformLocation(energy_for_linesearch_program, "gpu_line_search_mode");
+    }
+
+    static GLint final_current_energy_location = -1;
+    static GLint final_gradient_dot_location = -1;
+    static GLint final_state_location = -1;
+    static GLint final_control_mode_location = -1;
+    static GLint final_keep_accept_location = -1;
+    static GLint final_write_fallback_location = -1;
+    static GLint final_dispatch_group_location = -1;
+    static GLint final_dispatch_partial_location = -1;
+    static GLint final_shortcut_budget_location = -1;
+    static GLint final_candidate_count_location = -1;
+    static GLint final_first_step_location = -1;
+    static GLint final_adaptive_history_location = -1;
+    static GLint final_adaptive_batch_location = -1;
+    if (final_current_energy_location < 0)
+    {
+        final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
+        final_gradient_dot_location = glGetUniformLocation(choose_final_program, "grad_dot_d");
+        final_state_location = glGetUniformLocation(choose_final_program, "use_gpu_line_search_state");
+        final_control_mode_location = glGetUniformLocation(choose_final_program, "control_mode");
+        final_keep_accept_location = glGetUniformLocation(choose_final_program, "keep_existing_accept");
+        final_write_fallback_location = glGetUniformLocation(choose_final_program, "write_fallback_dispatch");
+        final_dispatch_group_location = glGetUniformLocation(choose_final_program, "dispatch_group_count");
+        final_dispatch_partial_location = glGetUniformLocation(choose_final_program, "dispatch_partial_count");
+        final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
+        final_candidate_count_location = glGetUniformLocation(choose_final_program, "gpu_candidate_count");
+        final_first_step_location = glGetUniformLocation(choose_final_program, "gpu_first_step");
+        final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+        final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
+    }
+
+    auto configure_adaptive_choose_final = [&](int final_batch, int keep_existing_accept, int write_fallback_dispatch)
+    {
+        glUseProgram(choose_final_program);
+        glUniform1f(final_current_energy_location, 0.0f);
+        glUniform1f(final_gradient_dot_location, 0.0f);
+        glUniform1i(final_state_location, 1);
+        glUniform1i(final_control_mode_location, 0);
+        glUniform1i(final_keep_accept_location, keep_existing_accept);
+        glUniform1i(final_write_fallback_location, write_fallback_dispatch);
+        glUniform1ui(final_dispatch_group_location, candidate_count);
+        glUniform1ui(final_dispatch_partial_location, partial_group_count);
+        glUniform1ui(final_shortcut_budget_location, 0u);
+        glUniform1i(final_candidate_count_location, static_cast<GLint>(candidate_count));
+        glUniform1f(final_first_step_location, 1.0f);
+        glUniform1i(final_adaptive_history_location, 1);
+        glUniform1i(final_adaptive_batch_location, final_batch);
+    };
+
+    // Base energy is evaluated once; both adaptive batches reuse energy[0].
+    comp_params.t0 = 0.0f;
+    comp_params.K = 1;
+    glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(adaptive_include_current_candidate_location, 0);
+    glUniform1i(adaptive_gpu_line_search_mode_location, 0);
+    glDispatchCompute(1, partial_group_count, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReduction(compute_program, testID, energyID, partial_group_count, 1u, false, false, 0u);
+
+    comp_params.t0 = 1.0f;
+    comp_params.K = base_K;
+    glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(adaptive_include_current_candidate_location, 0);
+    glUniform1i(adaptive_gpu_line_search_mode_location, 3);
+    glDispatchCompute(candidate_count, partial_group_count, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReduction(compute_program, testID, energyID, partial_group_count, candidate_count, false, false, 1u);
+
+    configure_adaptive_choose_final(0, 0, 1);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+
+    CSLineSearchResultGPU first_decision = {};
+    CSAdaptiveLineSearchStateGPU state_after_first = {};
+    bool first_batch_accepted = false;
+    if (trace_decisions)
+    {
+        if (!ReadCSLineSearchResult(ResultID, first_decision) || !ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, state_after_first))
+        {
+            throw std::runtime_error("Adaptive first-batch decision readback was non-finite.");
+        }
+        first_batch_accepted = first_decision.accepted != 0;
+        const unsigned int first_candidate_evaluations = state_after_first.candidate_evals - state_before.candidate_evals;
+        ++g_cs_profile_adaptive_batch_count;
+        g_cs_profile_adaptive_candidate_evaluations += first_candidate_evaluations;
+        AdaptiveLineSearchTraceRecord record = {};
+        record.iteration = m_current_iteration;
+        record.history_valid_before = state_before.history_valid;
+        record.batch_id = 0u;
+        record.base_step = state_before.current_batch_base;
+        record.candidate_count = candidate_count;
+        record.beta = m_ls_beta;
+        record.accepted = first_decision.accepted;
+        record.chosen_i = first_decision.chosen_i;
+        record.accepted_step = first_decision.step;
+        record.accepted_energy = first_decision.accepted_energy;
+        record.candidate_evaluations = first_candidate_evaluations;
+        record.fallback = 0u;
+        m_adaptive_ls_trace_records.push_back(record);
+        if (first_batch_accepted)
+        {
+            ++g_cs_profile_adaptive_first_batch_accepts;
+            ++g_cs_profile_accepted_candidate_count;
+            const unsigned int accepted_index = static_cast<unsigned int>(std::max(0, first_decision.chosen_i));
+            g_cs_profile_accepted_candidate_sum += accepted_index;
+            g_cs_profile_armijo_rejections += accepted_index;
+        }
+        else
+        {
+            g_cs_profile_armijo_rejections += candidate_count;
+            ++g_cs_profile_armijo_fallbacks;
+        }
+    }
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(adaptive_include_current_candidate_location, 0);
+    glUniform1i(adaptive_gpu_line_search_mode_location, 3);
+    glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, FlagID);
+    glDispatchComputeIndirect(0);
+    glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    DispatchCSReductionIndirect(compute_program, testID, energyID, partial_group_count, candidate_count, 1u, FlagID, static_cast<GLintptr>(4u * sizeof(GLuint)));
+
+    configure_adaptive_choose_final(1, 1, 0);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    if (trace_decisions)
+    {
+        CSLineSearchResultGPU final_decision = {};
+        CSAdaptiveLineSearchStateGPU state_after_final = {};
+        if (!ReadCSLineSearchResult(ResultID, final_decision) || !ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, state_after_final))
+        {
+            throw std::runtime_error("Adaptive Armijo decision readback was non-finite.");
+        }
+        if (!first_batch_accepted)
+        {
+            const unsigned int second_candidate_evaluations = state_after_final.candidate_evals - state_after_first.candidate_evals;
+            ++g_cs_profile_adaptive_batch_count;
+            g_cs_profile_adaptive_candidate_evaluations += second_candidate_evaluations;
+            AdaptiveLineSearchTraceRecord record = {};
+            record.iteration = m_current_iteration;
+            record.history_valid_before = state_before.history_valid;
+            record.batch_id = 1u;
+            record.base_step = state_after_first.current_batch_base;
+            record.candidate_count = candidate_count;
+            record.beta = m_ls_beta;
+            record.accepted = final_decision.accepted;
+            record.chosen_i = final_decision.chosen_i;
+            record.accepted_step = final_decision.step;
+            record.accepted_energy = final_decision.accepted_energy;
+            record.candidate_evaluations = second_candidate_evaluations;
+            record.fallback = 1u;
+            m_adaptive_ls_trace_records.push_back(record);
+            if (final_decision.accepted != 0)
+            {
+                ++g_cs_profile_adaptive_second_batch_accepts;
+                ++g_cs_profile_accepted_candidate_count;
+                const unsigned int accepted_index = candidate_count + static_cast<unsigned int>(std::max(0, final_decision.chosen_i));
+                g_cs_profile_accepted_candidate_sum += accepted_index;
+                g_cs_profile_armijo_rejections += static_cast<unsigned int>(std::max(0, final_decision.chosen_i));
+            }
+            else
+            {
+                ++g_cs_profile_armijo_failures;
+                g_cs_profile_armijo_rejections += candidate_count;
+                resetAdaptiveLineSearchState();
+            }
+        }
+        if (final_decision.accepted != 0)
+        {
+            ScalarType base_energy = 0.0;
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
+            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(base_energy), &base_energy);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+            ++g_cs_profile_host_readbacks;
+            const ScalarType armijo_rhs = base_energy + m_ls_alpha * static_cast<ScalarType>(final_decision.step) * m_cs_gradient_dot_descent;
+            const ScalarType tolerance = static_cast<ScalarType>(1e-6) * std::max<ScalarType>(1.0, std::abs(base_energy));
+            if (!std::isfinite(base_energy) || final_decision.accepted_energy > armijo_rhs + tolerance)
+            {
+                throw std::runtime_error("Adaptive GPU Armijo validation failed.");
+            }
+        }
+    }
+
+    glUseProgram(energy_for_linesearch_program);
+    glUniform1i(adaptive_include_current_candidate_location, 0);
+    glUniform1i(adaptive_gpu_line_search_mode_location, 0);
+    g_cs_unit_step_shortcut_budget = 0;
+    g_cs_prefetched_energy_valid = false;
+    m_ls_step_size = 1.0f;
+    return m_ls_step_size;
+}
+if (gpu_resident_line_search)
 	{
 		const unsigned int accepted_shortcut_budget =
 			(m_mesh && m_mesh->m_vertices_number >= kCSLargeClothVertexThreshold)
@@ -6482,6 +6929,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		static GLint gpu_final_shortcut_budget_location = -1;
 		static GLint gpu_final_candidate_count_location = -1;
 		static GLint gpu_final_first_step_location = -1;
+		static GLint gpu_final_adaptive_history_location = -1;
+		static GLint gpu_final_adaptive_batch_location = -1;
 		if (gpu_final_current_energy_location < 0)
 		{
 			gpu_final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
@@ -6495,6 +6944,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 			gpu_final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
 			gpu_final_candidate_count_location = glGetUniformLocation(choose_final_program, "gpu_candidate_count");
 			gpu_final_first_step_location = glGetUniformLocation(choose_final_program, "gpu_first_step");
+			gpu_final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+			gpu_final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
 		}
 
 		auto configure_choose_final = [&](int control_mode, int keep_existing_accept, int write_fallback_dispatch, GLuint dispatch_group_count, GLuint dispatch_partial_count, GLuint shortcut_budget_on_accept, int candidate_count, float first_step)
@@ -6511,6 +6962,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 			glUniform1ui(gpu_final_shortcut_budget_location, shortcut_budget_on_accept);
 			glUniform1i(gpu_final_candidate_count_location, candidate_count);
 			glUniform1f(gpu_final_first_step_location, first_step);
+			glUniform1i(gpu_final_adaptive_history_location, 0);
+			glUniform1i(gpu_final_adaptive_batch_location, 0);
 		};
 
 		configure_choose_final(1, 0, 0, unit_output_count, max_partial_group_count, 0u, 0, 1.0f);
@@ -6660,6 +7113,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	static GLint final_dispatch_group_location = -1;
 	static GLint final_dispatch_partial_location = -1;
 	static GLint final_shortcut_budget_location = -1;
+	static GLint final_adaptive_history_location = -1;
+	static GLint final_adaptive_batch_location = -1;
 	if (final_current_energy_location < 0)
 	{
 		final_current_energy_location = glGetUniformLocation(choose_final_program, "currentEnergy");
@@ -6671,6 +7126,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		final_dispatch_group_location = glGetUniformLocation(choose_final_program, "dispatch_group_count");
 		final_dispatch_partial_location = glGetUniformLocation(choose_final_program, "dispatch_partial_count");
 		final_shortcut_budget_location = glGetUniformLocation(choose_final_program, "shortcut_budget_on_accept");
+		final_adaptive_history_location = glGetUniformLocation(choose_final_program, "adaptive_history_enabled");
+		final_adaptive_batch_location = glGetUniformLocation(choose_final_program, "adaptive_final_batch");
 	}
 	glUniform1f(final_current_energy_location, static_cast<float>(current_objective_value));
 	glUniform1f(final_gradient_dot_location, static_cast<float>(m_cs_gradient_dot_descent));
@@ -6681,6 +7138,8 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 	glUniform1ui(final_dispatch_group_location, 0u);
 	glUniform1ui(final_dispatch_partial_location, 1u);
 	glUniform1ui(final_shortcut_budget_location, 0u);
+	glUniform1i(final_adaptive_history_location, 0);
+	glUniform1i(final_adaptive_batch_location, 0);
 	glDispatchCompute(1, 1, 1);
 	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 	if (m_profile_line_search_decisions)

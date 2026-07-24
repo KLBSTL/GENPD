@@ -8,6 +8,10 @@ $figure = Join-Path $ProjectRoot 'scripts\generate_line_search_figures.py'
 $root = Join-Path $ProjectRoot (Join-Path 'results' ('test-line-search-figure-rejection-' + $PID))
 & $runner -ProjectRoot $ProjectRoot -OutputDir $root -DryRun -KValues 1,2 -Betas 0.5 -RestartModes none
 if (-not (Test-Path -LiteralPath (Join-Path $root 'manifest.json'))) { throw 'Line-search figure rejection fixture was not created.' }
+$manifest = Get-Content -LiteralPath (Join-Path $root 'manifest.json') -Raw | ConvertFrom-Json
+if ($manifest.protocol_version -ne 3 -or @($manifest.adaptive_history_modes).Count -ne 3) {
+    throw 'Adaptive Armijo rejection fixture does not use the protocol-v3 trace contract.'
+}
 $python = Get-Command python -ErrorAction SilentlyContinue
 if (-not $python) { throw 'Python is required for the line-search figure contract.' }
 $rejected = $false
