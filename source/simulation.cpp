@@ -6607,6 +6607,10 @@ ScalarType Simulation::lineSearch_CS(const VectorX& x, const VectorX& gradient_d
 		g_cs_prefetched_energy_valid = true;
 		g_cs_unit_step_shortcut_budget = 0;
 		++g_cs_profile_unit_step_accepts;
+		if (m_profile_line_search_decisions)
+		{
+			++g_cs_profile_accepted_candidate_count;
+		}
 		m_ls_step_size = 1.0f;
 		UploadCSLineSearchResult(ResultID, m_ls_step_size, 0, 1, m_ls_prefetched_energy);
 		return m_ls_step_size;
