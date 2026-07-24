@@ -39,5 +39,10 @@ if ($manifest.variants -notcontains 'gpu-xpbd-jacobi' -or $manifest.quality_targ
 if (-not [bool]$manifest.validity_policy.invalid_frame_blocks_performance -or $manifest.validity_policy.required_gather_dimension -ne 386) {
     throw 'Paper experiment manifest does not encode the required gather validity policy.'
 }
+if ($manifest.calibration.candidate_iterations.Count -ne 13 -or
+    $manifest.calibration.candidate_iterations[-1] -ne 64 -or
+    $manifest.validity_policy.validity_matrix_schema -ne 'qualified-invalid-termination-reason') {
+    throw 'Paper experiment manifest does not encode the R2 calibration and validity contract.'
+}
 
 Write-Output "Paper experiment contract passed: $manifestPath"

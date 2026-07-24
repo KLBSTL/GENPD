@@ -211,9 +211,12 @@ foreach ($key in $groupRows.Keys) {
         host_readbacks_mean = Get-Mean @($runs | ForEach-Object { [double]$_.run.host_readbacks_mean })
         tracked_buffer_bytes_mean = Get-Mean @($runs | ForEach-Object { [double]$_.run.tracked_buffer_bytes_mean })
         persistent_buffers_active = $first.persistent_buffers_active
+        quality_gate = $caseInfo.quality_gate
         p95_position_rel_l2 = $caseInfo.p95_position_rel_l2
         p95_velocity_rel_l2 = $caseInfo.p95_velocity_rel_l2
         p95_energy_rel_error = $caseInfo.p95_energy_rel_error
+        p95_mean_stretch_strain = $caseInfo.p95_mean_stretch_strain
+        p95_max_stretch_strain = $caseInfo.p95_max_stretch_strain
         max_penetration_depth = $caseInfo.max_penetration_depth
         calibration_failure_rate = $caseInfo.failure_rate
     }

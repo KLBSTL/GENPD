@@ -23,6 +23,7 @@ VARIANTS = [
     'gpu-gather-fusion',
     'gpu-gather-fusion-batched-ls',
     'gpu-gather-fusion-batched-ls-persistent',
+    'gpu-xpbd-jacobi',
 ]
 VARIANT_LABELS = {
     'cpu-ncg': 'CPU NCG',
@@ -31,8 +32,10 @@ VARIANT_LABELS = {
     'gpu-gather-fusion': 'Gather + fusion',
     'gpu-gather-fusion-batched-ls': '+ batched LS',
     'gpu-gather-fusion-batched-ls-persistent': '+ persistent',
+    'gpu-xpbd-jacobi': 'GPU XPBD',
 }
-COLORS = ['#4E79A7', '#E15759', '#59A14F', '#F28E2B', '#B07AA1', '#76B7B2']
+COLORS = ['#4E79A7', '#E15759', '#59A14F', '#F28E2B', '#B07AA1', '#76B7B2', '#EDC948']
+NCG_VARIANTS = [variant for variant in VARIANTS if variant != 'gpu-xpbd-jacobi']
 
 plt.rcParams.update({
     'font.family': 'DejaVu Sans',
@@ -89,12 +92,13 @@ def validate_inputs(run_root):
     summary_path = os.path.join(run_root, 'paper_summary.csv')
     calibration_path = os.path.join(run_root, 'calibration.csv')
     selected_path = os.path.join(run_root, 'selected_budgets.csv')
+    validity_path = os.path.join(run_root, 'validity_matrix.csv')
     stability_path = os.path.join(run_root, 'stability_replicates.csv')
-    for path in [manifest_path, summary_path, calibration_path, selected_path, stability_path]:
+    for path in [manifest_path, summary_path, calibration_path, selected_path, validity_path, stability_path]:
         ensure(os.path.isfile(path), 'Required formal input is missing: {0}'.format(path))
     with open(manifest_path, 'r') as handle:
         manifest = json.load(handle)
-    ensure(manifest.get('protocol_version') == 1, 'Unexpected manifest protocol version.')
+    ensure(manifest.get('protocol_version') == 2, 'Unexpected manifest protocol version.')
     ensure(manifest['performance']['repetitions'] == 3, 'Formal figures require three repetitions.')
     ensure(abs(float(manifest['quality_target']['position_rel_l2_p95']) - 1e-3) < 1e-15,
            'Unexpected equal-quality threshold.')
@@ -102,10 +106,17 @@ def validate_inputs(run_root):
            'Formal figures require rendered end-to-end measurements.')
     ensure(manifest['measurement'].get('primary_metric') == 'frame_wall_ms',
            'Formal figures require frame_wall_ms as the primary metric.')
+    candidate_budgets = manifest.get('calibration', {}).get('candidate_iterations')
+    ensure(candidate_budgets == [1, 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64],
+           'Unexpected R2 calibration candidate budgets.')
+    ensure(manifest.get('validity_policy', {}).get('validity_matrix_schema') ==
+           'qualified-invalid-termination-reason',
+           'Formal figures require the R2 validity-matrix schema.')
 
     summary = load_csv(summary_path)
     calibration = load_csv(calibration_path)
     selected = load_csv(selected_path)
+    validity = load_csv(validity_path)
     stability = load_csv(stability_path)
     scenes = [item['id'] for item in manifest['scenes']]
     dimensions = [int(value) for value in manifest['resolutions']]
@@ -113,7 +124,10 @@ def validate_inputs(run_root):
     summary_keys = set(canonical_key(row) for row in summary)
     ensure(summary_keys.issubset(expected), 'paper_summary.csv contains an unknown formal case.')
     ensure(len(summary) == len(summary_keys), 'paper_summary.csv contains duplicate formal cases.')
-    ensure(len(calibration) == len(expected) * 11, 'Calibration CSV must contain all 11 candidate budgets per case.')
+    ensure(len(calibration) == len(expected) * len(candidate_budgets),
+           'Calibration CSV must contain all candidate budgets per case.')
+    validity_index = dict((canonical_key(row), row) for row in validity)
+    ensure(set(validity_index.keys()) == expected, 'Validity matrix must cover every formal case exactly once.')
 
     calibration_by_key = {}
     for row in calibration:
@@ -132,8 +146,21 @@ def validate_inputs(run_root):
         ensure(key in calibration_by_key, 'Selected quality budget has no calibration record: {0}'.format(key))
         record = calibration_by_key[key]
         ensure(as_int(record['qualified'], 'qualified', record) == 1, 'Selected case is not quality-qualified: {0}'.format(key))
-        ensure(as_float(record['p95_position_rel_l2'], 'p95_position_rel_l2', record) <= 1e-3,
-               'Selected case exceeds equal-quality threshold: {0}'.format(key))
+        validity_record = validity_index[canonical_key(selection)]
+        ensure(as_int(validity_record['qualified'], 'qualified', validity_record) == 1 and
+               as_int(validity_record['invalid'], 'invalid', validity_record) == 0,
+               'Selected case lacks a valid matrix entry: {0}'.format(key))
+        if record['quality_gate'] == 'xpbd-strain-penetration':
+            xpbd = manifest['quality_target']['xpbd']
+            ensure(as_float(record['p95_mean_stretch_strain'], 'p95_mean_stretch_strain', record) <= float(xpbd['p95_mean_stretch_strain']),
+                   'Selected XPBD case exceeds mean-strain threshold: {0}'.format(key))
+            ensure(as_float(record['p95_max_stretch_strain'], 'p95_max_stretch_strain', record) <= float(xpbd['p95_max_stretch_strain']),
+                   'Selected XPBD case exceeds max-strain threshold: {0}'.format(key))
+            ensure(as_float(record['max_penetration_depth'], 'max_penetration_depth', record) <= float(xpbd['max_penetration_depth']),
+                   'Selected XPBD case exceeds penetration threshold: {0}'.format(key))
+        else:
+            ensure(as_float(record['p95_position_rel_l2'], 'p95_position_rel_l2', record) <= 1e-3,
+                   'Selected NCG case exceeds equal-quality threshold: {0}'.format(key))
         for relative in [record['result_dir'], record['reference_dir']]:
             ensure(os.path.isdir(get_path(run_root, relative)), 'Missing raw quality directory: {0}'.format(relative))
         quality_path = os.path.join(get_path(run_root, record['result_dir']), 'quality_metrics.csv')
@@ -165,7 +192,7 @@ def validate_inputs(run_root):
             ensure(os.path.isfile(path) and os.path.getsize(path) > 1024,
                    'Missing current-commit qualitative capture: {0}'.format(path))
             capture_paths[(scene, dimension)] = path
-    return manifest, summary, stability, capture_paths, missing_keys
+    return manifest, summary, stability, capture_paths, validity_index
 
 
 def index_rows(rows):
@@ -177,12 +204,24 @@ def metric_or_none(indexed, key, field):
     return None if row is None else as_float(row[field], field, row)
 
 
-def mark_unqualified(ax, positions, values):
+def validity_label(validity, key):
+    record = validity.get(key)
+    if record is None:
+        return 'missing'
+    if as_int(record['qualified'], 'qualified', record) == 1:
+        return 'Q'
+    if as_int(record['invalid'], 'invalid', record) == 1:
+        reason = record.get('termination_reason', 'invalid')
+        return 'invalid\n{0}'.format(reason.replace('_', ' '))
+    return 'quality\ngate'
+
+
+def mark_excluded(ax, positions, values, keys, validity):
     finite = [value for value in values if value is not None]
     height = max(finite) if finite else 1.0
-    for position, value in zip(positions, values):
+    for position, value, key in zip(positions, values, keys):
         if value is None:
-            ax.text(position, height * 0.04, 'NQ', ha='center', va='bottom', fontsize=7, color='#555555')
+            ax.text(position, height * 0.04, validity_label(validity, key), ha='center', va='bottom', fontsize=5.8, color='#555555')
 
 
 def save_figure(fig, name, output_dir, paper_dir):
@@ -195,7 +234,7 @@ def save_figure(fig, name, output_dir, paper_dir):
     plt.close(fig)
 
 
-def plot_ablation(summary, output_dir, paper_dir):
+def plot_ablation(summary, validity, output_dir, paper_dir):
     indexed = index_rows(summary)
     fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.8))
     x = list(range(len(VARIANTS)))
@@ -211,7 +250,7 @@ def plot_ablation(summary, output_dir, paper_dir):
             if value is None:
                 bar.set_facecolor('#DDDDDD')
                 bar.set_hatch('xx')
-        mark_unqualified(ax, x, raw_means)
+        mark_excluded(ax, x, raw_means, keys, validity)
         ax.set_title('{0}: 148,996 vertices'.format('Hanging cloth' if scene == 'hanging' else 'Moving sphere'))
         ax.set_ylabel('Rendered frame time (ms)')
         ax.set_xticks(x)
@@ -229,7 +268,8 @@ def plot_ablation(summary, output_dir, paper_dir):
             if value is None:
                 bar.set_facecolor('#DDDDDD')
         if scene == 'hanging':
-            mark_unqualified(ax, [position + offset for position in x], raw_dispatches)
+            mark_excluded(ax, [position + offset for position in x], raw_dispatches,
+                          [(scene, 386, variant) for variant in VARIANTS], validity)
     ax.set_ylabel('Compute dispatches / frame')
     ax.set_xticks(x)
     ax.set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
@@ -248,15 +288,12 @@ def plot_ablation(summary, output_dir, paper_dir):
     secondary = ax.twinx()
     secondary.plot(x, readbacks, marker='o', color='#333333', linewidth=1.0, label='Host readbacks')
     secondary.set_ylabel('Host readbacks / frame')
-    ax.text(0.03, 0.96, 'Tracked GPU buffers: 9.1 MiB for all GPU variants',
-            transform=ax.transAxes, ha='left', va='top', fontsize=7,
-            bbox=dict(facecolor='white', edgecolor='none', alpha=0.85, pad=1.5))
     ax.set_title('Moving sphere: transfer and host readbacks')
     ax.grid(axis='y', alpha=0.25)
     save_figure(fig, 'ablation', output_dir, paper_dir)
 
 
-def plot_scalability_quality(summary, output_dir, paper_dir):
+def plot_scalability_quality(summary, validity, output_dir, paper_dir):
     indexed = index_rows(summary)
     dimensions = [128, 256, 386]
     fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.75))
@@ -289,40 +326,43 @@ def plot_scalability_quality(summary, output_dir, paper_dir):
     axes[0][1].grid(alpha=0.25)
 
     width = 0.35
-    x = list(range(len(VARIANTS)))
+    x = list(range(len(NCG_VARIANTS)))
     for offset, scene, hatch in [(-width / 2.0, 'hanging', ''), (width / 2.0, 'moving-sphere', '//')]:
-        raw_errors = [metric_or_none(indexed, (scene, 386, variant), 'p95_position_rel_l2') for variant in VARIANTS]
+        raw_errors = [metric_or_none(indexed, (scene, 386, variant), 'p95_position_rel_l2') for variant in NCG_VARIANTS]
         errors = [value if value is not None else 1e-8 for value in raw_errors]
-        bars = axes[1][0].bar([pos + offset for pos in x], errors, width=width, color=COLORS,
+        bars = axes[1][0].bar([pos + offset for pos in x], errors, width=width, color=COLORS[:len(NCG_VARIANTS)],
                         hatch=hatch, edgecolor='black', linewidth=0.3, label='Hanging' if scene == 'hanging' else 'Moving sphere')
         for bar, value in zip(bars, raw_errors):
             if value is None:
                 bar.set_facecolor('#DDDDDD')
                 bar.set_hatch('xx')
         if scene == 'hanging':
-            mark_unqualified(axes[1][0], [pos + offset for pos in x], raw_errors)
+            mark_excluded(axes[1][0], [pos + offset for pos in x], raw_errors,
+                          [(scene, 386, variant) for variant in NCG_VARIANTS], validity)
     axes[1][0].axhline(1e-3, color='#333333', linestyle='--', linewidth=0.8, label='Target')
     axes[1][0].set_yscale('log')
     axes[1][0].set_ylabel('P95 position relative L2')
     axes[1][0].set_xticks(x)
-    axes[1][0].set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
+    axes[1][0].set_xticklabels([VARIANT_LABELS[v] for v in NCG_VARIANTS], rotation=28, ha='right')
     axes[1][0].legend(frameon=False, ncol=2)
     axes[1][0].grid(axis='y', alpha=0.25)
 
     qualification = []
     for scene in ['hanging', 'moving-sphere']:
-        qualification.append([1 if (scene, 386, variant) in indexed else 0 for variant in VARIANTS])
+        qualification.append([1 if validity_label(validity, (scene, 386, variant)) == 'Q' else 0 for variant in VARIANTS])
     axes[1][1].imshow(qualification, cmap='RdYlGn', vmin=0, vmax=1, aspect='auto')
     for row_index, values in enumerate(qualification):
         for col_index, value in enumerate(values):
-            axes[1][1].text(col_index, row_index, 'Q' if value else 'NQ', ha='center', va='center',
-                            fontsize=8, color='white' if value == 0 else 'black')
-    axes[1][1].set_title('386$^2$ equal-quality qualification')
+            key = (['hanging', 'moving-sphere'][row_index], 386, VARIANTS[col_index])
+            label = validity_label(validity, key)
+            axes[1][1].text(col_index, row_index, label, ha='center', va='center',
+                            fontsize=5.8, color='white' if value == 0 else 'black')
+    axes[1][1].set_title('386$^2$ validity and quality gate')
     axes[1][1].set_yticks([0, 1])
     axes[1][1].set_yticklabels(['Hanging', 'Moving sphere'])
     axes[1][1].set_xticks(x)
     axes[1][1].set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=28, ha='right')
-    axes[1][1].text(0.02, -0.45, 'Q: P95 relative L2 <= 1e-3; all Q cases have 0 calibration failures.',
+    axes[1][1].text(0.02, -0.45, 'Q: NCG P95 relative L2 <= 1e-3; XPBD uses strain/penetration gates.',
                     transform=axes[1][1].transAxes, ha='left', va='top', fontsize=6.5)
     save_figure(fig, 'scalability_quality', output_dir, paper_dir)
 
@@ -354,6 +394,44 @@ def plot_stability_heatmap(stability, output_dir, paper_dir):
     save_figure(fig, 'stability_heatmap', output_dir, paper_dir)
 
 
+def plot_validity_matrix(manifest, validity, output_dir, paper_dir):
+    scenes = [item['id'] for item in manifest['scenes']]
+    dimensions = [int(value) for value in manifest['resolutions']]
+    row_keys = [(scene, dimension) for scene in scenes for dimension in dimensions]
+    matrix = []
+    labels = []
+    for scene, dimension in row_keys:
+        row = []
+        for variant in VARIANTS:
+            record = validity[(scene, dimension, variant)]
+            label = validity_label(validity, (scene, dimension, variant))
+            if label == 'Q':
+                row.append(2)
+            elif as_int(record['invalid'], 'invalid', record) == 1:
+                row.append(0)
+            else:
+                row.append(1)
+        matrix.append(row)
+        labels.append('{0}, {1}^2'.format('Sphere' if scene == 'moving-sphere' else 'Hanging', dimension))
+    fig, ax = plt.subplots(figsize=(7.1, 3.25))
+    ax.imshow(matrix, cmap=matplotlib.colors.ListedColormap(['#E15759', '#BAB0AC', '#59A14F']),
+              vmin=0, vmax=2, aspect='auto')
+    for row_index, _ in enumerate(labels):
+        for col_index, variant in enumerate(VARIANTS):
+            ax.text(col_index, row_index,
+                    validity_label(validity, row_keys[row_index] + (variant,)),
+                    ha='center', va='center', fontsize=5.8,
+                    color='white' if matrix[row_index][col_index] == 0 else 'black')
+    ax.set_xticks(range(len(VARIANTS)))
+    ax.set_xticklabels([VARIANT_LABELS[v] for v in VARIANTS], rotation=24, ha='right')
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.set_title('Validity matrix: invalid state vs. quality gate')
+    ax.text(0.0, -0.24, 'Green: selected equal-quality case. Gray: finite but did not pass its pre-registered gate. Red: invalid frame; label gives termination reason.',
+            transform=ax.transAxes, ha='left', va='top', fontsize=6.5)
+    save_figure(fig, 'validity_matrix', output_dir, paper_dir)
+
+
 def plot_qualitative(captures, output_dir, paper_dir):
     dimensions = [128, 256, 386]
     scenes = [('hanging', 'Hanging cloth'), ('moving-sphere', 'Moving sphere')]
@@ -375,10 +453,11 @@ def main():
     run_root = os.path.abspath(args.run_root)
     paper_dir = os.path.abspath(args.paper_figure_dir)
     output_dir = os.path.join(run_root, 'figures')
-    manifest, summary, stability, captures, missing_keys = validate_inputs(run_root)
-    plot_ablation(summary, output_dir, paper_dir)
-    plot_scalability_quality(summary, output_dir, paper_dir)
+    manifest, summary, stability, captures, validity = validate_inputs(run_root)
+    plot_ablation(summary, validity, output_dir, paper_dir)
+    plot_scalability_quality(summary, validity, output_dir, paper_dir)
     plot_stability_heatmap(stability, output_dir, paper_dir)
+    plot_validity_matrix(manifest, validity, output_dir, paper_dir)
     plot_qualitative(captures, output_dir, paper_dir)
     print('Generated evidence-backed figures in {0} and {1}'.format(output_dir, paper_dir))
 

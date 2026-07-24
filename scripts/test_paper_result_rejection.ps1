@@ -40,4 +40,5 @@ if (-not $figureFailed) {
     throw 'Figure script accepted incomplete formal evidence.'
 }
 
+$global:LASTEXITCODE = 0
 Write-Host "Paper result rejection contract passed: $runRoot"

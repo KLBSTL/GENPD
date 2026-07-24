@@ -132,6 +132,11 @@ function Write-Manifest {
                 max_penetration_depth = $xpbdPenetrationThreshold
             }
         }
+        calibration = [ordered]@{
+            candidate_iterations = $candidateBudgets
+            selection_rule = 'minimum-qualified-iteration-budget'
+            invalid_candidate_retained = $true
+        }
         performance = [ordered]@{
             frames = $performanceFrames
             warmup_frames = $performanceWarmup
@@ -165,6 +170,7 @@ function Write-Manifest {
             solver_variant = 'gpu-gather-fusion-batched-ls-persistent'
         }
         validity_policy = [ordered]@{
+            validity_matrix_schema = 'qualified-invalid-termination-reason'
             invalid_frame_blocks_performance = $true
             required_gather_scene = 'hanging'
             required_gather_dimension = 386
