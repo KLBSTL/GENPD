@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $manifestPath)) { throw "Missing manifest: $man
 if (-not (Test-Path -LiteralPath $selectedPath)) { throw "Missing selected equal-quality budgets: $selectedPath" }
 if (-not (Test-Path -LiteralPath $validityPath)) { throw "Missing explicit validity matrix: $validityPath" }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-if ([int]$manifest.protocol_version -ne 3) { throw 'Formal R2 summary requires protocol version 3.' }
+if ([int]$manifest.protocol_version -ne 4) { throw 'Formal R2 summary requires protocol version 4.' }
 if (-not [bool]$manifest.scope.complete_matrix -or -not [bool]$manifest.scope.paper_figure_eligible) {
     throw 'Formal R2 summary requires a complete, figure-eligible matrix.'
 }
@@ -220,6 +220,10 @@ foreach ($key in $groupRows.Keys) {
         p95_energy_rel_error = $caseInfo.p95_energy_rel_error
         p95_mean_stretch_strain = $caseInfo.p95_mean_stretch_strain
         p95_max_stretch_strain = $caseInfo.p95_max_stretch_strain
+        p95_reference_mean_stretch_strain = $caseInfo.p95_reference_mean_stretch_strain
+        p95_reference_max_stretch_strain = $caseInfo.p95_reference_max_stretch_strain
+        p95_checkpoint_mean_stretch_strain = $caseInfo.p95_checkpoint_mean_stretch_strain
+        p95_checkpoint_max_stretch_strain = $caseInfo.p95_checkpoint_max_stretch_strain
         max_penetration_depth = $caseInfo.max_penetration_depth
         calibration_failure_rate = $caseInfo.failure_rate
     }

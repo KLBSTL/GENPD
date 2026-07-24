@@ -98,7 +98,7 @@ def validate_inputs(run_root):
         ensure(os.path.isfile(path), 'Required formal input is missing: {0}'.format(path))
     with open(manifest_path, 'r') as handle:
         manifest = json.load(handle)
-    ensure(manifest.get('protocol_version') == 3, 'Unexpected manifest protocol version.')
+    ensure(manifest.get('protocol_version') == 4, 'Unexpected manifest protocol version.')
     ensure(manifest.get('scope', {}).get('complete_matrix') is True and
            manifest.get('scope', {}).get('paper_figure_eligible') is True,
            'Formal paper figures require a complete, figure-eligible R2 matrix.')
@@ -155,11 +155,13 @@ def validate_inputs(run_root):
                'Selected case lacks a valid matrix entry: {0}'.format(key))
         if record['quality_gate'] == 'xpbd-strain-reference-max-penetration':
             xpbd = manifest['quality_target']['xpbd']
-            ensure(as_float(record['p95_mean_stretch_strain'], 'p95_mean_stretch_strain', record) <= float(xpbd['p95_mean_stretch_strain']),
+            ensure(xpbd.get('quality_sampling') == 'reference-checkpoint-frames',
+                   'XPBD quality gate must use reference checkpoint frames.')
+            ensure(as_float(record['p95_checkpoint_mean_stretch_strain'], 'p95_checkpoint_mean_stretch_strain', record) <= float(xpbd['p95_mean_stretch_strain']),
                    'Selected XPBD case exceeds mean-strain threshold: {0}'.format(key))
             reference_max = as_float(record['p95_reference_max_stretch_strain'], 'p95_reference_max_stretch_strain', record)
             ensure(reference_max > 0.0, 'Selected XPBD case has no positive reference max strain: {0}'.format(key))
-            ensure(as_float(record['p95_max_stretch_strain'], 'p95_max_stretch_strain', record) <=
+            ensure(as_float(record['p95_checkpoint_max_stretch_strain'], 'p95_checkpoint_max_stretch_strain', record) <=
                    float(xpbd['p95_max_stretch_strain_reference_ratio']) * reference_max,
                    'Selected XPBD case exceeds reference-relative max-strain threshold: {0}'.format(key))
             ensure(as_float(record['max_penetration_depth'], 'max_penetration_depth', record) <= float(xpbd['max_penetration_depth']),

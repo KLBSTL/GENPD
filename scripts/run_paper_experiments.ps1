@@ -137,7 +137,7 @@ function Write-Manifest {
     if ((Test-Path -LiteralPath $manifestPath) -and -not $Force) { return $manifestPath }
     $currentCommit = Get-ShortCommit
     $manifest = [ordered]@{
-        protocol_version = 3
+        protocol_version = 4
         label = $RunLabel
         created_utc = [DateTime]::UtcNow.ToString('o', $invariant)
         git_commit = $currentCommit
@@ -161,6 +161,7 @@ function Write-Manifest {
             position_rel_l2_p95 = $qualityThreshold
             ncg_position_rel_l2_p95 = $qualityThreshold
             xpbd = [ordered]@{
+                quality_sampling = 'reference-checkpoint-frames'
                 p95_mean_stretch_strain = $xpbdMeanStrainThreshold
                 p95_max_stretch_strain_reference_ratio = $xpbdMaxStrainReferenceRatio
                 max_penetration_depth = $xpbdPenetrationThreshold
@@ -358,6 +359,8 @@ function Get-QualitySummary {
     $penetration = @($qualityRows | ForEach-Object { Convert-ToInvariantDouble $_.max_penetration_depth } | Where-Object { $null -ne $_ })
     $referenceMeanStrain = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.reference_mean_stretch_strain } | Where-Object { $null -ne $_ })
     $referenceMaxStrain = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.reference_max_stretch_strain } | Where-Object { $null -ne $_ })
+    $checkpointMeanStrain = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.mean_stretch_strain } | Where-Object { $null -ne $_ })
+    $checkpointMaxStrain = @($referenceRows | ForEach-Object { Convert-ToInvariantDouble $_.max_stretch_strain } | Where-Object { $null -ne $_ })
     return [pscustomobject]@{
         reference_rows = $referenceRows.Count
         invalid_records = $invalidFrames.Count
@@ -368,6 +371,8 @@ function Get-QualitySummary {
         p95_max_stretch_strain = Get-Percentile -Values $maxStrain -Percentile 0.95
         p95_reference_mean_stretch_strain = Get-Percentile -Values $referenceMeanStrain -Percentile 0.95
         p95_reference_max_stretch_strain = Get-Percentile -Values $referenceMaxStrain -Percentile 0.95
+        p95_checkpoint_mean_stretch_strain = Get-Percentile -Values $checkpointMeanStrain -Percentile 0.95
+        p95_checkpoint_max_stretch_strain = Get-Percentile -Values $checkpointMaxStrain -Percentile 0.95
         max_penetration_depth = if ($penetration.Count -gt 0) { ($penetration | Measure-Object -Maximum).Maximum } else { $null }
         failure_rate = if ($profileRows.Count -gt 0) { [double]$invalidFrames.Count / [double]$profileRows.Count } else { 1.0 }
         termination_reason = if ($firstTermination.Count -gt 0) { $firstTermination[0].termination_reason } else { 'none' }
@@ -405,10 +410,10 @@ function Invoke-Calibration {
                     $qualityGate = if ($isXPBD) { 'xpbd-strain-reference-max-penetration' } else { 'ncg-reference-position' }
                     $qualified = if ($isXPBD) {
                         $metrics.invalid_records -eq 0 -and `
-                        $null -ne $metrics.p95_mean_stretch_strain -and $metrics.p95_mean_stretch_strain -le $xpbdMeanStrainThreshold -and `
-                        $null -ne $metrics.p95_max_stretch_strain -and `
+                        $null -ne $metrics.p95_checkpoint_mean_stretch_strain -and $metrics.p95_checkpoint_mean_stretch_strain -le $xpbdMeanStrainThreshold -and `
+                        $null -ne $metrics.p95_checkpoint_max_stretch_strain -and `
                         $null -ne $metrics.p95_reference_max_stretch_strain -and $metrics.p95_reference_max_stretch_strain -gt 0.0 -and `
-                        $metrics.p95_max_stretch_strain -le ($xpbdMaxStrainReferenceRatio * $metrics.p95_reference_max_stretch_strain) -and `
+                        $metrics.p95_checkpoint_max_stretch_strain -le ($xpbdMaxStrainReferenceRatio * $metrics.p95_reference_max_stretch_strain) -and `
                         $null -ne $metrics.max_penetration_depth -and $metrics.max_penetration_depth -le $xpbdPenetrationThreshold
                     } else {
                         $metrics.reference_rows -gt 0 -and $metrics.invalid_records -eq 0 -and `
@@ -430,6 +435,8 @@ function Invoke-Calibration {
                         p95_max_stretch_strain = $metrics.p95_max_stretch_strain
                         p95_reference_mean_stretch_strain = $metrics.p95_reference_mean_stretch_strain
                         p95_reference_max_stretch_strain = $metrics.p95_reference_max_stretch_strain
+                        p95_checkpoint_mean_stretch_strain = $metrics.p95_checkpoint_mean_stretch_strain
+                        p95_checkpoint_max_stretch_strain = $metrics.p95_checkpoint_max_stretch_strain
                         max_penetration_depth = $metrics.max_penetration_depth
                         failure_rate = $metrics.failure_rate
                         termination_reason = $metrics.termination_reason
@@ -469,6 +476,8 @@ function Invoke-Calibration {
             p95_max_stretch_strain = $representative.p95_max_stretch_strain
             p95_reference_mean_stretch_strain = $representative.p95_reference_mean_stretch_strain
             p95_reference_max_stretch_strain = $representative.p95_reference_max_stretch_strain
+            p95_checkpoint_mean_stretch_strain = $representative.p95_checkpoint_mean_stretch_strain
+            p95_checkpoint_max_stretch_strain = $representative.p95_checkpoint_max_stretch_strain
             max_penetration_depth = $representative.max_penetration_depth
             result_dir = $representative.result_dir
         }
