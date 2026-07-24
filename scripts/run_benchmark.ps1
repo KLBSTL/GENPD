@@ -21,6 +21,7 @@ param(
     [int]$CaptureHeight = 0,
     [int]$RenderWidth = 0,
     [int]$RenderHeight = 0,
+    [int]$ProcessTimeoutSeconds = 0,
     [switch]$Headless,
     [bool]$NoRender = $false,
     [bool]$Uncapped = $true,
@@ -98,6 +99,7 @@ if (($CaptureWidth -lt 0) -or ($CaptureHeight -lt 0) -or (($CaptureWidth -eq 0) 
 if (($RenderWidth -lt 0) -or ($RenderHeight -lt 0) -or (($RenderWidth -eq 0) -ne ($RenderHeight -eq 0))) {
     throw 'RenderWidth and RenderHeight must both be positive when specified.'
 }
+if ($ProcessTimeoutSeconds -lt 0) { throw 'ProcessTimeoutSeconds must be nonnegative.' }
 if ($CaptureFrame -ge 0 -and $CaptureOutput -eq '') {
     $CaptureOutput = Join-Path $OutputDir ('capture_frame_{0:D6}.png' -f $CaptureFrame)
 }
@@ -144,8 +146,37 @@ $logPath = Join-Path $OutputDir 'benchmark_stdout.log'
 Write-Host "Running: $ExePath $($appArgs -join ' ')"
 Push-Location (Split-Path -Parent $ExePath)
 try {
-    & $ExePath @appArgs *>&1 | Tee-Object -FilePath $logPath
-    $exitCode = $LASTEXITCODE
+    if ($ProcessTimeoutSeconds -eq 0) {
+        & $ExePath @appArgs *>&1 | Tee-Object -FilePath $logPath
+        $exitCode = $LASTEXITCODE
+    }
+    else {
+        $stderrPath = Join-Path $OutputDir 'benchmark_stderr.log'
+        $argumentLine = ($appArgs | ForEach-Object {
+            if ($_ -match '[\s\"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+        }) -join ' '
+        $process = Start-Process -FilePath $ExePath -ArgumentList $argumentLine -WorkingDirectory (Split-Path -Parent $ExePath) `
+            -RedirectStandardOutput $logPath -RedirectStandardError $stderrPath -PassThru -NoNewWindow
+        if (-not $process.WaitForExit($ProcessTimeoutSeconds * 1000)) {
+            $process.Kill()
+            $process.WaitForExit()
+            throw "Benchmark exceeded the $ProcessTimeoutSeconds second timeout. Logs: $logPath, $stderrPath"
+        }
+        $process.WaitForExit()
+        $process.Refresh()
+        $exitCode = $process.ExitCode
+        Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue | Write-Host
+        Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue | Write-Host
+        if ($null -eq $exitCode) {
+            $requiredArtifacts = @('frame_profile.csv', 'frame_profile_experiment.csv', 'frame_presentation.csv', 'run_metadata.json') |
+                ForEach-Object { Join-Path $OutputDir $_ }
+            $missingArtifacts = @($requiredArtifacts | Where-Object { -not (Test-Path -LiteralPath $_) })
+            if ($missingArtifacts.Count -gt 0) {
+                throw "Benchmark process ended without an observable exit code and did not produce: $($missingArtifacts -join ', ')"
+            }
+            $exitCode = 0
+        }
+    }
 }
 finally {
     Pop-Location
@@ -162,3 +193,4 @@ Write-Host "Run metadata: $(Join-Path $OutputDir 'run_metadata.json')"
 if ($QualityMetrics -or $ReferenceExportDir -ne '' -or $QualityReferenceDir -ne '') {
     Write-Host "Quality metrics: $(Join-Path $OutputDir 'quality_metrics.csv')"
 }
+$global:LASTEXITCODE = 0

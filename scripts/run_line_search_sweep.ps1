@@ -8,8 +8,11 @@ param(
     [int]$IterationsPerFrame = 16,
     [int]$TimingFrames = 300,
     [int]$TimingWarmup = 30,
+    [int]$TimingRepetitions = 3,
     [int]$TraceFrames = 120,
     [int]$TraceWarmup = 20,
+    [int]$ProcessTimeoutSeconds = 180,
+    [int]$InterRunDelayMilliseconds = 1000,
     [int[]]$KValues = @(1, 2, 4, 8),
     [double[]]$Betas = @(0.25, 0.5, 0.75),
     [ValidateSet('none', 'periodic', 'non-descent')]
@@ -33,7 +36,8 @@ $benchmarkScript = Join-Path $scriptDir 'run_benchmark.ps1'
 
 if (-not (Test-Path -LiteralPath $benchmarkScript)) { throw "Missing benchmark wrapper: $benchmarkScript" }
 if ($ClothDimension -lt 2 -or $IterationsPerFrame -lt 1) { throw 'ClothDimension and IterationsPerFrame must be positive.' }
-if ($TimingFrames -lt 1 -or $TraceFrames -lt 1 -or $TimingWarmup -lt 0 -or $TraceWarmup -lt 0) { throw 'Frame counts are invalid.' }
+if ($TimingFrames -lt 1 -or $TraceFrames -lt 1 -or $TimingWarmup -lt 0 -or $TraceWarmup -lt 0 -or $TimingRepetitions -lt 1) { throw 'Frame counts are invalid.' }
+if ($ProcessTimeoutSeconds -lt 1 -or $InterRunDelayMilliseconds -lt 0) { throw 'Timeout and inter-run delay values are invalid.' }
 if ($RestartModes -contains 'periodic' -and $RestartPeriod -lt 1) { throw 'RestartPeriod must be positive for periodic restart.' }
 foreach ($k in $KValues) { if ($k -lt 1) { throw 'All K values must be positive.' } }
 foreach ($beta in $Betas) { if ($beta -le 0 -or $beta -ge 1) { throw 'All beta values must be in (0, 1).' } }
@@ -74,6 +78,15 @@ function Get-Mean {
     param([double[]]$Values)
     if ($Values.Count -eq 0) { return $null }
     return [double](($Values | Measure-Object -Average).Average)
+}
+
+function Get-Std {
+    param([double[]]$Values)
+    if ($Values.Count -lt 2) { return 0.0 }
+    $mean = Get-Mean $Values
+    $sumSquares = 0.0
+    foreach ($value in $Values) { $sumSquares += ($value - $mean) * ($value - $mean) }
+    return [math]::Sqrt($sumSquares / [double]($Values.Count - 1))
 }
 
 function Test-RenderedRun {
@@ -120,21 +133,22 @@ function Get-CaseId {
 }
 
 function Invoke-Run {
-    param([string]$Kind, [string]$Variant, [int]$K, [double]$Beta, [string]$RestartMode)
+    param([string]$Kind, [string]$Variant, [int]$K, [double]$Beta, [string]$RestartMode, [int]$Repetition = 0)
     $caseId = Get-CaseId -Variant $Variant -K $K -Beta $Beta -RestartMode $RestartMode
     $directory = Join-Path $OutputDir (Join-Path $Kind $caseId)
+    if ($Kind -eq 'timing') { $directory = Join-Path $directory ('rep{0:D2}' -f $Repetition) }
     $frames = if ($Kind -eq 'timing') { $TimingFrames } else { $TraceFrames }
     $warmup = if ($Kind -eq 'timing') { $TimingWarmup } else { $TraceWarmup }
     $needsQuality = $Kind -eq 'trace'
     $needsTrace = $Kind -eq 'trace'
     if (-not $Force -and (Test-RenderedRun -Directory $directory -Frames $frames -Warmup $warmup -RequireQuality:$needsQuality -RequireDecisionTrace:$needsTrace)) { return $directory }
-    if ($DryRun) { Write-Host "[dry-run] $Kind $caseId"; return $directory }
+    if ($DryRun) { Write-Host "[dry-run] $Kind $caseId$(if ($Kind -eq 'timing') { " rep$Repetition" })"; return $directory }
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     $extra = Get-RunExtraArgs -K $K -Beta $Beta -RestartMode $RestartMode
     if ($Kind -eq 'trace') { $extra += '--profile-line-search-decisions' }
     $parameters = @{
         ProjectRoot = $ProjectRoot
-        RunLabel = "$RunLabel-$Kind-$caseId"
+        RunLabel = "$RunLabel-$Kind-$caseId$(if ($Kind -eq 'timing') { "-rep$('{0:D2}' -f $Repetition)" })"
         Frames = $frames
         Warmup = $warmup
         SolverVariant = $Variant
@@ -145,6 +159,7 @@ function Invoke-Run {
         DisableVsync = $true
         RenderWidth = 1600
         RenderHeight = 900
+        ProcessTimeoutSeconds = $ProcessTimeoutSeconds
         ExtraArgs = $extra
     }
     if ($Kind -eq 'trace') {
@@ -155,6 +170,7 @@ function Invoke-Run {
         }
     }
     & $benchmarkScript @parameters | Out-Host
+    if ($InterRunDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $InterRunDelayMilliseconds }
     if (-not (Test-RenderedRun -Directory $directory -Frames $frames -Warmup $warmup -RequireQuality:$needsQuality -RequireDecisionTrace:$needsTrace)) {
         throw "Incomplete or invalid $Kind run: $directory"
     }
@@ -162,9 +178,19 @@ function Invoke-Run {
 }
 
 function Get-CaseSummary {
-    param([string]$TimingDir, [string]$TraceDir, [string]$Variant, [int]$K, [double]$Beta, [string]$RestartMode)
-    $timingPresentation = @(Import-Csv -LiteralPath (Join-Path $TimingDir 'frame_presentation.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
-    $timingProfile = @(Import-Csv -LiteralPath (Join-Path $TimingDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+    param([string[]]$TimingDirs, [string]$TraceDir, [string]$Variant, [int]$K, [double]$Beta, [string]$RestartMode)
+    $timingPresentation = @()
+    $timingProfile = @()
+    $timingRunMeans = @()
+    $timingTotalMeans = @()
+    foreach ($timingDir in $TimingDirs) {
+        $presentationRows = @(Import-Csv -LiteralPath (Join-Path $timingDir 'frame_presentation.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $profileRows = @(Import-Csv -LiteralPath (Join-Path $timingDir 'frame_profile.csv') | Where-Object { [int]$_.frame -ge $TimingWarmup })
+        $timingPresentation += $presentationRows
+        $timingProfile += $profileRows
+        $timingRunMeans += Get-Mean @($presentationRows | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ })
+        $timingTotalMeans += Get-Mean @($profileRows | ForEach-Object { Read-Double $_.total_ms } | Where-Object { $null -ne $_ })
+    }
     $traceExtended = @(Import-Csv -LiteralPath (Join-Path $TraceDir 'frame_profile_extended.csv') | Where-Object { [int]$_.frame -ge $TraceWarmup })
     $quality = @(Import-Csv -LiteralPath (Join-Path $TraceDir 'quality_metrics.csv') | Where-Object { [int]$_.frame -ge $TraceWarmup })
     $timeValues = @($timingPresentation | ForEach-Object { Read-Double $_.frame_wall_ms } | Where-Object { $null -ne $_ })
@@ -184,13 +210,17 @@ function Get-CaseSummary {
         armijo_beta = Format-Double $Beta
         ncg_restart_mode = $RestartMode
         ncg_restart_period = if ($RestartMode -eq 'periodic') { $RestartPeriod } else { 0 }
-        timing_dir = $TimingDir
+        timing_dirs = ($TimingDirs -join ';')
+        timing_repetitions = $TimingDirs.Count
         trace_dir = $TraceDir
-        timing_frames = $timingPresentation.Count
-        trace_frames = $traceExtended.Count
-        rendered_frame_wall_ms_mean = Get-Mean $timeValues
+        timing_frames_per_repetition = $TimingFrames
+        timing_frame_samples = $timingPresentation.Count
+        trace_frame_samples = $traceExtended.Count
+        rendered_frame_wall_ms_mean = Get-Mean $timingRunMeans
+        rendered_frame_wall_ms_std = Get-Std $timingRunMeans
         rendered_frame_wall_ms_p95 = Get-Percentile -Values $timeValues -Quantile 0.95
-        total_ms_mean = Get-Mean $totalValues
+        total_ms_mean = Get-Mean $timingTotalMeans
+        total_ms_std = Get-Std $timingTotalMeans
         armijo_rejections = @($traceExtended | ForEach-Object { Read-Double $_.armijo_rejections } | Where-Object { $null -ne $_ } | Measure-Object -Sum).Sum
         armijo_failures = @($traceExtended | ForEach-Object { Read-Double $_.armijo_failures } | Where-Object { $null -ne $_ } | Measure-Object -Sum).Sum
         armijo_fallbacks = @($traceExtended | ForEach-Object { Read-Double $_.armijo_fallbacks } | Where-Object { $null -ne $_ } | Measure-Object -Sum).Sum
@@ -209,9 +239,12 @@ function Get-CaseSummary {
     }
 }
 
+$variants = @('gpu-gather-fusion', 'gpu-gather-fusion-batched-ls')
+if ($IncludePersistent) { $variants += 'gpu-gather-fusion-batched-ls-persistent' }
+
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $manifest = [ordered]@{
-    protocol_version = 1
+    protocol_version = 2
     label = $RunLabel
     measurement = 'rendered-end-to-end'
     timing_run_has_decision_tracing = $false
@@ -219,26 +252,30 @@ $manifest = [ordered]@{
     scene = $Scene
     cloth_dimension = $ClothDimension
     iterations_per_frame = $IterationsPerFrame
-    timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; render_width = 1600; render_height = 900 }
+    timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; repetitions = $TimingRepetitions; render_width = 1600; render_height = 900 }
     trace = [ordered]@{ frames = $TraceFrames; warmup = $TraceWarmup; quality_reference_dir = $QualityReferenceDir }
     k_values = $KValues
     armijo_betas = $Betas
     restart_modes = $RestartModes
     restart_period = $RestartPeriod
+    solver_variants = $variants
+    process_timeout_seconds = $ProcessTimeoutSeconds
+    inter_run_delay_milliseconds = $InterRunDelayMilliseconds
 }
 [System.IO.File]::WriteAllText((Join-Path $OutputDir 'manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
 
-$variants = @('gpu-gather-fusion', 'gpu-gather-fusion-batched-ls')
-if ($IncludePersistent) { $variants += 'gpu-gather-fusion-batched-ls-persistent' }
 $rows = @()
 foreach ($variant in $variants) {
     $ks = if ($variant -eq 'gpu-gather-fusion') { @(1) } else { $KValues }
     foreach ($k in $ks) {
         foreach ($beta in $Betas) {
             foreach ($restartMode in $RestartModes) {
-                $timingDir = Invoke-Run -Kind 'timing' -Variant $variant -K $k -Beta $beta -RestartMode $restartMode
+                $timingDirs = @()
+                for ($rep = 1; $rep -le $TimingRepetitions; ++$rep) {
+                    $timingDirs += Invoke-Run -Kind 'timing' -Variant $variant -K $k -Beta $beta -RestartMode $restartMode -Repetition $rep
+                }
                 $traceDir = Invoke-Run -Kind 'trace' -Variant $variant -K $k -Beta $beta -RestartMode $restartMode
-                if (-not $DryRun) { $rows += Get-CaseSummary -TimingDir $timingDir -TraceDir $traceDir -Variant $variant -K $k -Beta $beta -RestartMode $restartMode }
+                if (-not $DryRun) { $rows += Get-CaseSummary -TimingDirs $timingDirs -TraceDir $traceDir -Variant $variant -K $k -Beta $beta -RestartMode $restartMode }
             }
         }
     }

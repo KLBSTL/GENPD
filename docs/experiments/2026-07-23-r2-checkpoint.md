@@ -15,6 +15,9 @@ unchanged and is not positive performance evidence.
   case is invalid or misses its quality gate.
 - Nsight and benchmark wrappers now use actual rendering for paper-labelled
   runs. `--no-render` is rejected for a `paper-*` label.
+- `f567a39` makes the R2 manifest self-describing for its full calibration
+  budget set and validity-matrix schema. Figure generation distinguishes an
+  invalid frame from a finite result that misses its quality gate.
 
 ## Line-Search Smoke Evidence
 
@@ -42,6 +45,17 @@ the CPU-NCG reference checkpoints for its chosen scene/resolution and pass
 them to `run_line_search_sweep.ps1 -RequireReference`. No formal R2 reference,
 calibration, performance, stability, material-matrix, or line-search sweep
 has been launched at this checkpoint.
+
+The line-search runner now uses protocol 2: each timing configuration defaults
+to three actual-render repetitions, while one separate rendered trace collects
+the Armijo/restart diagnostics and quality metrics. `ProcessTimeoutSeconds` and
+an inter-run delay prevent a stalled OpenGL process from blocking the full
+matrix. `results/smoke-line-search-repeats-2` verified two repetitions for both
+serial and batched variants, with valid frames and no residual process. Its
+one-frame measurements are plumbing evidence only, not paper data. The
+evidence-gated `generate_line_search_figures.py` refuses any run missing the
+pre-registered 300+30/3 timing protocol, 120+20 trace protocol, or CPU quality
+reference.
 
 ## Scene/Material Smoke Evidence
 
