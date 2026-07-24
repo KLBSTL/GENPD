@@ -115,6 +115,22 @@ typedef enum
 	ADAPTIVE_LS_HISTORY_FRAME
 } AdaptiveLineSearchHistoryMode;
 
+struct AdaptiveLineSearchTraceRecord
+{
+	unsigned int iteration;
+	unsigned int history_valid_before;
+	unsigned int batch_id;
+	ScalarType base_step;
+	unsigned int candidate_count;
+	ScalarType beta;
+	int accepted;
+	int chosen_i;
+	ScalarType accepted_step;
+	ScalarType accepted_energy;
+	unsigned int candidate_evaluations;
+	unsigned int fallback;
+};
+
 struct alignas(16) ParamsUBO {
 	float t0;  // 0
 	float beta; // 4
@@ -355,6 +371,7 @@ protected:
 	unsigned int m_batched_ls_k;
 	AdaptiveLineSearchHistoryMode m_adaptive_ls_history_mode;
 	bool m_adaptive_ls_was_active;
+	std::vector<AdaptiveLineSearchTraceRecord> m_adaptive_ls_trace_records;
 	NCGRestartMode m_ncg_restart_mode;
 	unsigned int m_ncg_restart_period;
 	// prefetched instructions in linesearch

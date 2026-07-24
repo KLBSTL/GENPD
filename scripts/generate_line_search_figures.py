@@ -1,4 +1,4 @@
-"""Generate evidence-gated line-search figures for the GenPD manuscript."""
+"""Generate evidence-gated adaptive Armijo figures for the GenPD manuscript."""
 
 import argparse
 import csv
@@ -10,26 +10,22 @@ import matplotlib.pyplot as plt
 
 
 COLORS = {
-    'gpu-gather-fusion': '#4E79A7',
-    'gpu-gather-fusion-batched-ls': '#F28E2B',
-    'gpu-gather-fusion-batched-ls-persistent': '#76B7B2',
+    ('fixed', 'none'): '#4E79A7',
+    ('adaptive', 'none'): '#F28E2B',
+    ('adaptive', 'iteration'): '#59A14F',
+    ('adaptive', 'frame'): '#E15759',
 }
 LABELS = {
-    'gpu-gather-fusion': 'Serial Armijo',
-    'gpu-gather-fusion-batched-ls': 'Batched Armijo',
-    'gpu-gather-fusion-batched-ls-persistent': 'Batched + persistent',
+    ('fixed', 'none'): 'Fixed batched',
+    ('adaptive', 'none'): 'Adaptive, no history',
+    ('adaptive', 'iteration'): 'Adaptive, iteration history',
+    ('adaptive', 'frame'): 'Adaptive, frame history',
 }
 
 plt.rcParams.update({
-    'font.family': 'DejaVu Sans',
-    'font.size': 8,
-    'axes.labelsize': 8,
-    'axes.titlesize': 9,
-    'xtick.labelsize': 7,
-    'ytick.labelsize': 7,
-    'legend.fontsize': 7,
-    'pdf.fonttype': 42,
-    'ps.fonttype': 42,
+    'font.family': 'DejaVu Sans', 'font.size': 8, 'axes.labelsize': 8,
+    'axes.titlesize': 9, 'xtick.labelsize': 7, 'ytick.labelsize': 7,
+    'legend.fontsize': 7, 'pdf.fonttype': 42, 'ps.fonttype': 42,
 })
 
 
@@ -70,7 +66,7 @@ def as_bool(value):
 
 def row_key(row):
     return (
-        row['solver_variant'],
+        row['schedule'], row['adaptive_ls_history'],
         as_int(row['batched_ls_k'], 'batched_ls_k', row),
         round(as_float(row['armijo_beta'], 'armijo_beta', row), 8),
         row['ncg_restart_mode'],
@@ -79,12 +75,13 @@ def row_key(row):
 
 def expected_keys(manifest):
     result = set()
-    for variant in manifest['solver_variants']:
-        values_k = [1] if variant == 'gpu-gather-fusion' else manifest['k_values']
-        for k_value in values_k:
-            for beta in manifest['armijo_betas']:
-                for restart in manifest['restart_modes']:
-                    result.add((variant, int(k_value), round(float(beta), 8), restart))
+    for schedule in manifest['schedules']:
+        histories = manifest['adaptive_history_modes'] if schedule == 'adaptive' else ['none']
+        for history in histories:
+            for k_value in manifest['k_values']:
+                for beta in manifest['armijo_betas']:
+                    for restart in manifest['restart_modes']:
+                        result.add((schedule, history, int(k_value), round(float(beta), 8), restart))
     return result
 
 
@@ -92,33 +89,38 @@ def validate_run(run_root):
     manifest_path = os.path.join(run_root, 'manifest.json')
     summary_path = os.path.join(run_root, 'line_search_summary.csv')
     if not os.path.isfile(manifest_path) or not os.path.isfile(summary_path):
-        fail('Formal line-search manifest or summary is missing.')
+        fail('Formal adaptive Armijo manifest or summary is missing.')
     manifest = load_json(manifest_path)
-    if manifest.get('protocol_version') != 2:
-        fail('Formal line-search figures require protocol version 2.')
+    if manifest.get('protocol_version') != 3:
+        fail('Adaptive Armijo figures require protocol version 3.')
     if manifest.get('measurement') != 'rendered-end-to-end':
-        fail('Formal line-search figures require actual rendered measurements.')
+        fail('Adaptive Armijo figures require rendered measurements.')
     if manifest.get('timing_run_has_decision_tracing') or not manifest.get('trace_run_has_decision_tracing'):
         fail('Timing and diagnostic tracing are not correctly separated.')
+    if manifest.get('schedules') != ['fixed', 'adaptive']:
+        fail('Adaptive Armijo figures require fixed and adaptive schedules.')
+    if manifest.get('adaptive_history_modes') != ['none', 'iteration', 'frame']:
+        fail('Adaptive Armijo figures require all history-scope controls.')
     timing = manifest.get('timing', {})
     trace = manifest.get('trace', {})
     if timing.get('frames') != 300 or timing.get('warmup') != 30 or timing.get('repetitions') != 3:
-        fail('Formal line-search timing must use 300 measured, 30 warm-up, and 3 repetitions.')
+        fail('Formal timing must use 300 measured, 30 warm-up, and 3 repetitions.')
     if trace.get('frames') != 120 or trace.get('warmup') != 20 or not trace.get('quality_reference_dir'):
-        fail('Formal line-search traces require 120 measured, 20 warm-up, and a quality reference.')
-    if manifest.get('k_values') != [1, 2, 4, 8]:
-        fail('Formal line-search figure requires K={1,2,4,8}.')
-    if [round(float(value), 8) for value in manifest.get('armijo_betas', [])] != [0.25, 0.5, 0.75]:
-        fail('Formal line-search figure requires beta={0.25,0.5,0.75}.')
-    if manifest.get('restart_modes') != ['none', 'periodic', 'non-descent']:
-        fail('Formal line-search figure requires all restart modes.')
+        fail('Formal traces require 120 measured, 20 warm-up, and a quality reference.')
 
     rows = load_csv(summary_path)
     index = {}
+    required_fields = [
+        'rendered_frame_wall_ms_mean', 'rendered_frame_wall_ms_std',
+        'rendered_frame_wall_ms_p95', 'line_search_ms',
+        'candidates_per_search', 'history_use_ratio',
+        'first_batch_accept_ratio', 'second_batch_accept_ratio',
+        'fallback_ratio', 'p95_position_rel_l2',
+    ]
     for row in rows:
         key = row_key(row)
         if key in index:
-            fail('Duplicate line-search row: {0}'.format(key))
+            fail('Duplicate adaptive Armijo row: {0}'.format(key))
         if as_int(row['timing_repetitions'], 'timing_repetitions', row) != 3:
             fail('Incomplete timing repetitions: {0}'.format(key))
         if as_int(row['timing_frames_per_repetition'], 'timing_frames_per_repetition', row) != 300:
@@ -135,13 +137,7 @@ def validate_run(run_root):
             fail('Trace contains invalid frames: {0}'.format(key))
         if as_float(row['trace_failure_rate'], 'trace_failure_rate', row) != 0.0:
             fail('Trace reports a failure rate: {0}'.format(key))
-        for field in [
-            'rendered_frame_wall_ms_mean', 'rendered_frame_wall_ms_std',
-            'rendered_frame_wall_ms_p95', 'total_ms_mean', 'total_ms_std',
-            'p95_position_rel_l2', 'p95_velocity_rel_l2',
-            'p95_mean_stretch_strain', 'p95_max_stretch_strain',
-            'max_penetration_depth',
-        ]:
+        for field in required_fields:
             as_float(row[field], field, row)
         timing_dirs = row['timing_dirs'].split(';')
         if len(timing_dirs) != 3 or not all(os.path.isdir(path) for path in timing_dirs):
@@ -154,20 +150,22 @@ def validate_run(run_root):
                 fail('Timing metadata is not rendered and GPU-synchronised: {0}'.format(path))
             if as_bool(metadata['solver_controls']['line_search_decisions_profiled']):
                 fail('Timing metadata enables decision tracing: {0}'.format(path))
-        trace_metadata = load_json(os.path.join(row['trace_dir'], 'run_metadata.json'))
+        trace_dir = row['trace_dir']
+        trace_metadata = load_json(os.path.join(trace_dir, 'run_metadata.json'))
         if trace_metadata['benchmark']['no_render'] or not trace_metadata['benchmark']['sync_gpu']:
             fail('Trace metadata is not rendered and GPU-synchronised: {0}'.format(key))
         if not as_bool(trace_metadata['solver_controls']['line_search_decisions_profiled']):
             fail('Trace metadata lacks decision tracing: {0}'.format(key))
+        if row['schedule'] == 'adaptive' and not os.path.isfile(os.path.join(trace_dir, 'line_search_trace.csv')):
+            fail('Adaptive trace CSV is missing: {0}'.format(key))
         index[key] = row
-    required = expected_keys(manifest)
-    if set(index.keys()) != required:
-        fail('Line-search summary does not cover the pre-registered matrix.')
+    if set(index.keys()) != expected_keys(manifest):
+        fail('Adaptive Armijo summary does not cover the pre-registered matrix.')
     return manifest, index
 
 
-def get_row(index, variant, k_value, beta, restart):
-    key = (variant, k_value, round(beta, 8), restart)
+def get_row(index, schedule, history, k_value, beta, restart):
+    key = (schedule, history, int(k_value), round(float(beta), 8), restart)
     if key not in index:
         fail('Missing required plotting row: {0}'.format(key))
     return index[key]
@@ -184,80 +182,48 @@ def save_figure(fig, run_root, paper_dir):
 
 
 def plot(manifest, index, run_root, paper_dir):
-    variants = manifest['solver_variants']
     k_values = manifest['k_values']
+    beta = 0.5 if 0.5 in manifest['armijo_betas'] else manifest['armijo_betas'][0]
+    k_focus = 4 if 4 in k_values else k_values[-1]
+    restart = 'non-descent' if 'non-descent' in manifest['restart_modes'] else manifest['restart_modes'][0]
     fig, axes = plt.subplots(2, 2, figsize=(7.1, 4.55))
 
     ax = axes[0][0]
-    serial = get_row(index, 'gpu-gather-fusion', 1, 0.5, 'none')
-    ax.errorbar([1], [as_float(serial['rendered_frame_wall_ms_mean'], 'time', serial)],
-                yerr=[as_float(serial['rendered_frame_wall_ms_std'], 'std', serial)],
-                fmt='o', color=COLORS['gpu-gather-fusion'], label=LABELS['gpu-gather-fusion'])
-    for variant in variants:
-        if variant == 'gpu-gather-fusion':
-            continue
-        rows = [get_row(index, variant, k_value, 0.5, 'none') for k_value in k_values]
-        means = [as_float(row['rendered_frame_wall_ms_mean'], 'time', row) for row in rows]
-        stds = [as_float(row['rendered_frame_wall_ms_std'], 'std', row) for row in rows]
-        ax.errorbar(k_values, means, yerr=stds, marker='o', linewidth=1.15,
-                    color=COLORS[variant], label=LABELS[variant])
-    ax.set_xlabel('Batched candidates K')
-    ax.set_ylabel('Rendered frame time (ms)')
-    ax.set_title('K sensitivity (beta=0.5, no restart)')
-    ax.set_xticks(k_values)
-    ax.grid(alpha=0.25)
-    ax.legend(frameon=False)
+    for schedule, history in [('fixed', 'none'), ('adaptive', 'frame')]:
+        rows = [get_row(index, schedule, history, k, beta, restart) for k in k_values]
+        ax.errorbar(k_values, [as_float(r['rendered_frame_wall_ms_mean'], 'frame time', r) for r in rows],
+                    yerr=[as_float(r['rendered_frame_wall_ms_std'], 'frame std', r) for r in rows],
+                    marker='o', linewidth=1.15, color=COLORS[(schedule, history)], label=LABELS[(schedule, history)])
+    ax.set_xlabel('Batched candidates K'); ax.set_ylabel('Rendered frame time (ms)')
+    ax.set_title('Candidate-count sensitivity'); ax.set_xticks(k_values); ax.grid(alpha=0.25); ax.legend(frameon=False)
 
     ax = axes[0][1]
-    beta_values = [0.25, 0.5, 0.75]
-    for variant in variants:
-        if variant == 'gpu-gather-fusion':
-            continue
-        rows = [get_row(index, variant, 4, beta, 'none') for beta in beta_values]
-        means = [as_float(row['rendered_frame_wall_ms_mean'], 'time', row) for row in rows]
-        stds = [as_float(row['rendered_frame_wall_ms_std'], 'std', row) for row in rows]
-        ax.errorbar(beta_values, means, yerr=stds, marker='o', linewidth=1.15,
-                    color=COLORS[variant], label=LABELS[variant])
-    ax.set_xlabel('Armijo beta')
-    ax.set_ylabel('Rendered frame time (ms)')
-    ax.set_title('Beta sensitivity (K=4, no restart)')
-    ax.set_xticks(beta_values)
-    ax.grid(alpha=0.25)
+    histories = ['none', 'iteration', 'frame']
+    rows = [get_row(index, 'adaptive', history, k_focus, beta, restart) for history in histories]
+    x = list(range(len(histories)))
+    ax.bar(x, [as_float(r['rendered_frame_wall_ms_mean'], 'frame time', r) for r in rows], color=[COLORS[('adaptive', h)] for h in histories])
+    ax.errorbar(x, [as_float(r['rendered_frame_wall_ms_mean'], 'frame time', r) for r in rows],
+                yerr=[as_float(r['rendered_frame_wall_ms_std'], 'frame std', r) for r in rows], fmt='none', ecolor='#333333', capsize=2)
+    ax.set_xticks(x, ['none', 'iteration', 'frame']); ax.set_ylabel('Rendered frame time (ms)')
+    ax.set_title('History-scope ablation'); ax.grid(axis='y', alpha=0.25)
 
     ax = axes[1][0]
-    variant = 'gpu-gather-fusion-batched-ls'
-    rows = [get_row(index, variant, 4, beta, 'none') for beta in beta_values]
-    rejection_rate = [as_float(row['armijo_rejections'], 'armijo_rejections', row) /
-                      as_int(row['trace_frame_samples'], 'trace_frame_samples', row) for row in rows]
-    accepted_index = [as_float(row['accepted_candidate_index_mean'], 'accepted_candidate_index_mean', row) for row in rows]
-    ax.bar(beta_values, rejection_rate, width=0.1, color=COLORS[variant], label='Armijo rejections / frame')
-    ax.set_xlabel('Armijo beta')
-    ax.set_ylabel('Rejections / trace frame')
-    ax.set_title('Diagnostic Armijo decisions (K=4)')
-    ax.set_xticks(beta_values)
-    ax.grid(axis='y', alpha=0.25)
-    secondary = ax.twinx()
-    secondary.plot(beta_values, accepted_index, color='#333333', marker='o', linewidth=1.0,
-                   label='Accepted candidate index')
-    secondary.set_ylabel('Accepted candidate index')
+    candidates = [as_float(r['candidates_per_search'], 'candidates_per_search', r) for r in rows]
+    history_use = [as_float(r['history_use_ratio'], 'history_use_ratio', r) for r in rows]
+    ax.bar(x, candidates, color=[COLORS[('adaptive', h)] for h in histories], label='Candidates / search')
+    ax.set_xticks(x, histories); ax.set_ylabel('Candidates / search')
+    second = ax.twinx(); second.plot(x, history_use, color='#333333', marker='o', linewidth=1.1, label='History-use ratio')
+    second.set_ylabel('History-use ratio'); ax.set_title('Temporal-coherence diagnostics'); ax.grid(axis='y', alpha=0.25)
 
     ax = axes[1][1]
-    for variant in variants:
-        if variant == 'gpu-gather-fusion':
-            continue
-        for restart in manifest['restart_modes']:
-            row = get_row(index, variant, 4, 0.5, restart)
-            time_value = as_float(row['rendered_frame_wall_ms_mean'], 'time', row)
-            error_value = as_float(row['p95_position_rel_l2'], 'p95_position_rel_l2', row)
-            ax.scatter([time_value], [error_value], color=COLORS[variant], s=24)
-            ax.annotate('{0}: {1}'.format(LABELS[variant].replace('Batched ', ''), restart),
-                        (time_value, error_value), xytext=(3, 3), textcoords='offset points', fontsize=6.2)
-    ax.set_xlabel('Rendered frame time (ms)')
-    ax.set_ylabel('P95 position relative L2')
-    ax.set_yscale('log')
-    ax.set_title('Restart quality/time Pareto (K=4, beta=0.5)')
-    ax.grid(alpha=0.25)
-
+    for schedule, history in [('fixed', 'none')] + [('adaptive', h) for h in histories]:
+        row = get_row(index, schedule, history, k_focus, beta, restart)
+        time_value = as_float(row['rendered_frame_wall_ms_mean'], 'frame time', row)
+        error_value = as_float(row['p95_position_rel_l2'], 'p95_position_rel_l2', row)
+        ax.scatter([time_value], [error_value], s=28, color=COLORS[(schedule, history)])
+        ax.annotate(LABELS[(schedule, history)], (time_value, error_value), xytext=(3, 3), textcoords='offset points', fontsize=6.2)
+    ax.set_xlabel('Rendered frame time (ms)'); ax.set_ylabel('P95 position relative L2')
+    ax.set_yscale('log'); ax.set_title('Quality/time Pareto'); ax.grid(alpha=0.25)
     fig.tight_layout(pad=0.7)
     save_figure(fig, run_root, paper_dir)
 
@@ -271,7 +237,7 @@ def main():
     paper_dir = os.path.abspath(args.paper_figure_dir)
     manifest, index = validate_run(run_root)
     plot(manifest, index, run_root, paper_dir)
-    print('Generated evidence-gated line-search figures in {0}'.format(os.path.join(run_root, 'figures')))
+    print('Generated evidence-gated adaptive Armijo figures in {0}'.format(os.path.join(run_root, 'figures')))
 
 
 if __name__ == '__main__':
