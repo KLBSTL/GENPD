@@ -3,7 +3,7 @@
 ## Protocol
 
 - Commit `c8831ec`; all timing is rendered 1600x900 with 30 warm-up + 300 measured frames and three repetitions.
-- A separate rendered 100-iteration CPU-NCG reference produces checkpoints for the 120-frame quality/decision traces. Timing excludes quality readback and decision tracing.
+- The 120-frame quality/decision traces use archived rendered 100-iteration CPU-NCG checkpoints from `c73d2bb`. Timing excludes quality readback and decision tracing.
 - Core: serial persistent Armijo, fixed K=8 persistent, and adaptive K=4 persistent with no/iteration/frame history. Sensitivity: moving sphere at 256^2 and 386^2, K={2,4,8}, beta={0.25,0.5,0.75}, and three history modes.
 
 ## Core results

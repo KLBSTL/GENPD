@@ -330,7 +330,7 @@ def write_report(path, manifest, core, sensitivity, checks, go, improvements, hi
         "## Protocol",
         "",
         "- Commit `{0}`; all timing is rendered 1600x900 with {1} warm-up + {2} measured frames and three repetitions.".format(manifest["git_commit"], manifest["timing"]["warmup"], manifest["timing"]["frames"]),
-        "- A separate rendered 100-iteration CPU-NCG reference produces checkpoints for the 120-frame quality/decision traces. Timing excludes quality readback and decision tracing.",
+        "- The 120-frame quality/decision traces use archived rendered 100-iteration CPU-NCG checkpoints from `{0}`. Timing excludes quality readback and decision tracing.".format(manifest["reference"]["calibration_commit"]),
         "- Core: serial persistent Armijo, fixed K=8 persistent, and adaptive K=4 persistent with no/iteration/frame history. Sensitivity: moving sphere at 256^2 and 386^2, K={2,4,8}, beta={0.25,0.5,0.75}, and three history modes.",
         "",
         "## Core results",
