@@ -143,6 +143,7 @@ std::string g_cli_adaptive_ls_history = "frame";
 std::string g_cli_ncg_restart_mode;
 int g_cli_ncg_restart_period = 0;
 std::string g_cli_verify_cs_gradient_dir;
+std::string g_cli_verify_adaptive_ls_history_reset_dir;
 std::string g_cli_scene;
 int g_cli_capture_frame = -1;
 std::string g_cli_capture_output;
@@ -423,6 +424,12 @@ glutReshapeWindow(g_screen_width, g_screen_height);
 	{
 		const std::string verification_dir = GenPDResolveOutputPath(g_cli_verify_cs_gradient_dir);
 		const bool verified = g_simulation->VerifyCSGradient(verification_dir);
+		return verified ? EXIT_SUCCESS : EXIT_FAILURE;
+	}
+	if (!g_cli_verify_adaptive_ls_history_reset_dir.empty())
+	{
+		const std::string verification_dir = GenPDResolveOutputPath(g_cli_verify_adaptive_ls_history_reset_dir);
+		const bool verified = g_simulation->VerifyAdaptiveLineSearchHistoryInvalidation(verification_dir);
 		return verified ? EXIT_SUCCESS : EXIT_FAILURE;
 	}
 	if (g_benchmark_mode)
@@ -1080,6 +1087,10 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_verify_cs_gradient_dir = argv[++i];
         }
+		else if (arg == "--verify-adaptive-ls-history-resets" && i + 1 < argc)
+		{
+			g_cli_verify_adaptive_ls_history_reset_dir = argv[++i];
+		}
         else if (arg == "--scene" && i + 1 < argc)
         {
             g_cli_scene = argv[++i];
@@ -1163,6 +1174,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --ncg-restart-mode MODE     none | periodic | non-descent.\n"
                 << "  --ncg-restart-period N      Period for periodic NCG restart.\n"
                 << "  --verify-cs-gradient PATH  Export CPU/edge/gather gradient diagnostics and exit.\n"
+				<< "  --verify-adaptive-ls-history-resets PATH  Verify Reset/stiffness invalidation of adaptive history and exit.\n"
                 << "  --scene PATH                Load a scene XML file relative to project root.\n"
                 << "  --capture-frame N           Capture rendered benchmark frame N.\n"
                 << "  --capture-output PATH       PNG output path for --capture-frame.\n"

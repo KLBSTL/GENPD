@@ -1601,6 +1601,105 @@ bool Simulation::VerifyCSGradient(const std::string& output_dir)
 		<< ": " << csv_path << std::endl;
 	return pass;
 }
+
+bool Simulation::VerifyAdaptiveLineSearchHistoryInvalidation(const std::string& output_dir)
+{
+	if (!use_cs || !GenPDExperimentUsesAdaptiveLineSearch() || adaptiveLineSearchStateID == 0)
+	{
+		std::cerr << "Adaptive history verification requires the adaptive GPU line-search variant." << std::endl;
+		return false;
+	}
+	if (!GenPDEnsureDirectory(output_dir))
+	{
+		std::cerr << "Cannot create adaptive history verification directory: " << output_dir << std::endl;
+		return false;
+	}
+
+	struct VerificationRow
+	{
+		const char* event;
+		CSAdaptiveLineSearchStateGPU before;
+		CSAdaptiveLineSearchStateGPU after;
+		bool passed;
+	};
+	std::vector<VerificationRow> rows;
+	const ScalarType original_stretch = m_stiffness_stretch;
+	const ScalarType original_bending = m_stiffness_bending;
+
+	auto seed_history = [this]()
+	{
+		CSAdaptiveLineSearchStateGPU state = {};
+		state.previous_accepted_step = 0.125f;
+		state.current_batch_base = 0.25f;
+		state.history_valid = 1u;
+		state.previous_index = 2u;
+		state.fallback_batches = 3u;
+		state.candidate_evals = 4u;
+		state.history_generation = m_cs_adaptive_ls_history_generation;
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, adaptiveLineSearchStateID);
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(state), &state);
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+	};
+	auto state_is_reset = [](const CSAdaptiveLineSearchStateGPU& state)
+	{
+		return state.history_valid == 0u
+			&& state.previous_accepted_step == 1.0f
+			&& state.current_batch_base == 1.0f
+			&& state.previous_index == 0u
+			&& state.fallback_batches == 0u
+			&& state.candidate_evals == 0u;
+	};
+
+	seed_history();
+	CSAdaptiveLineSearchStateGPU reset_before = {};
+	CSAdaptiveLineSearchStateGPU reset_after = {};
+	const bool reset_before_valid = ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, reset_before);
+	Reset();
+	const bool reset_after_valid = ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, reset_after);
+	const bool reset_passed = reset_before_valid && reset_after_valid
+		&& reset_before.history_valid == 1u && state_is_reset(reset_after)
+		&& reset_after.history_generation != reset_before.history_generation;
+	rows.push_back({ "reset", reset_before, reset_after, reset_passed });
+
+	seed_history();
+	CSAdaptiveLineSearchStateGPU stiffness_before = {};
+	CSAdaptiveLineSearchStateGPU stiffness_after = {};
+	const bool stiffness_before_valid = ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, stiffness_before);
+	const ScalarType changed_stretch = original_stretch > 0.0
+		? original_stretch * static_cast<ScalarType>(1.25)
+		: static_cast<ScalarType>(1.0);
+	SetExperimentMaterialStiffness(changed_stretch, original_bending);
+	const bool stiffness_after_valid = ReadCSAdaptiveLineSearchState(adaptiveLineSearchStateID, stiffness_after);
+	const bool stiffness_passed = stiffness_before_valid && stiffness_after_valid
+		&& stiffness_before.history_valid == 1u && state_is_reset(stiffness_after)
+		&& stiffness_after.history_generation != stiffness_before.history_generation;
+	rows.push_back({ "stiffness-change", stiffness_before, stiffness_after, stiffness_passed });
+	SetExperimentMaterialStiffness(original_stretch, original_bending);
+
+	const std::string csv_path = output_dir + "\\adaptive_ls_history_reset_verification.csv";
+	std::ofstream csv(csv_path.c_str(), std::ios::out | std::ios::trunc);
+	if (!csv)
+	{
+		std::cerr << "Cannot write adaptive history verification CSV: " << csv_path << std::endl;
+		return false;
+	}
+	csv << "event,history_valid_before,history_valid_after,previous_accepted_step_after,current_batch_base_after,generation_before,generation_after,generation_increased,passed\n";
+	for (std::vector<VerificationRow>::const_iterator it = rows.begin(); it != rows.end(); ++it)
+	{
+		csv << it->event << "," << it->before.history_valid << "," << it->after.history_valid << ","
+			<< it->after.previous_accepted_step << "," << it->after.current_batch_base << ","
+			<< it->before.history_generation << "," << it->after.history_generation << ","
+			<< (it->after.history_generation != it->before.history_generation ? 1 : 0) << ","
+			<< (it->passed ? 1 : 0) << "\n";
+	}
+
+	const bool pass = reset_passed && stiffness_passed && rows.size() == 2u;
+	std::cout << "Adaptive line-search history verification " << (pass ? "passed" : "failed")
+		<< ": " << csv_path << std::endl;
+	return pass;
+}
+
 void Simulation::collisionPostProcessCS(VectorX& x, VectorX& v)
 {
 	if (!m_processing_collision || !m_scene || m_scene->IsEmpty())

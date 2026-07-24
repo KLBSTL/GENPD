@@ -269,6 +269,7 @@ void ConfigureQualityMetrics(const std::string& reference_export_dir, const std:
 inline void SetIterationsPerFrame(unsigned int iteration_count) { m_iterations_per_frame = iteration_count > 0u ? iteration_count : 1u; }
 inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; }
 	bool VerifyCSGradient(const std::string& output_dir);
+	bool VerifyAdaptiveLineSearchHistoryInvalidation(const std::string& output_dir);
 	void SetBatchedLineSearchK(unsigned int candidate_count);
 	void SetArmijoBeta(ScalarType beta);
 	void SetAdaptiveLineSearchHistoryMode(AdaptiveLineSearchHistoryMode mode);
