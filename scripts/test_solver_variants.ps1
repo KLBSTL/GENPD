@@ -32,6 +32,7 @@ if ($helpText -notmatch '--solver-variant') {
     'gpu-edge-scatter',
     'gpu-gather-no-fusion',
     'gpu-gather-fusion',
+    'gpu-gather-fusion-serial-ls-persistent',
     'gpu-gather-fusion-batched-ls',
     'gpu-gather-fusion-batched-ls-persistent',
     'gpu-gather-fusion-adaptive-ls-persistent',

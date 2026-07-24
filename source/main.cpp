@@ -1170,6 +1170,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --render-resolution W H     Render benchmarks at a fixed viewport.\n"
 				<< "  --solver-variant NAME       cpu-ncg | gpu-edge-scatter | gpu-gather-no-fusion |\n"
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
+				<< "                              gpu-gather-fusion-serial-ls-persistent |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent |\n"
 				<< "                              gpu-gather-fusion-adaptive-ls-persistent | gpu-xpbd-jacobi.\n"
 				<< "  --print-paths               Print resolved project/output/executable paths.\n"
