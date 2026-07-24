@@ -98,8 +98,9 @@ foreach ($case in $cases) {
         for ($rep = 1; $rep -le $TimingRepetitions; ++$rep) {
             $outputDir = Join-Path $RunRoot (Join-Path 'timing' (Join-Path $caseId (Join-Path $condition ('rep{0:D2}' -f $rep))))
             if ((Test-Path -LiteralPath (Join-Path $outputDir 'frame_presentation.csv')) -and -not $Force) { continue }
+            $benchmarkLabel = if ($condition -eq 'forced-cpu-state-roundtrip') { "diagnostic-$RunLabel" } else { $RunLabel }
             $params = @{
-                ProjectRoot = $ProjectRoot; RunLabel = "$RunLabel-$caseId-$condition-rep$('{0:D2}' -f $rep)"; OutputDir = $outputDir
+                ProjectRoot = $ProjectRoot; RunLabel = "$benchmarkLabel-$caseId-$condition-rep$('{0:D2}' -f $rep)"; OutputDir = $outputDir
                 SolverVariant = 'gpu-gather-fusion-batched-ls-persistent'; IterationsPerFrame = $case.iterations_per_frame
                 Frames = $TimingFrames; Warmup = $TimingWarmup; Uncapped = $true; SyncGpu = $true; DisableVsync = $true
                 RenderWidth = $RenderWidth; RenderHeight = $RenderHeight; ProcessTimeoutSeconds = $ProcessTimeoutSeconds
@@ -112,8 +113,9 @@ foreach ($case in $cases) {
         }
         $qualityDir = Join-Path $RunRoot (Join-Path 'quality' (Join-Path $caseId $condition))
         if (-not (Test-Path -LiteralPath (Join-Path $qualityDir 'quality_metrics.csv')) -or $Force) {
+            $benchmarkLabel = if ($condition -eq 'forced-cpu-state-roundtrip') { "diagnostic-$RunLabel" } else { $RunLabel }
             $qualityParams = @{
-                ProjectRoot = $ProjectRoot; RunLabel = "$RunLabel-quality-$caseId-$condition"; OutputDir = $qualityDir
+                ProjectRoot = $ProjectRoot; RunLabel = "$benchmarkLabel-quality-$caseId-$condition"; OutputDir = $qualityDir
                 SolverVariant = 'gpu-gather-fusion-batched-ls-persistent'; IterationsPerFrame = $case.iterations_per_frame
                 Frames = $QualityFrames; Warmup = $QualityWarmup; Uncapped = $true; SyncGpu = $true; DisableVsync = $true
                 RenderWidth = $RenderWidth; RenderHeight = $RenderHeight; ProcessTimeoutSeconds = $ProcessTimeoutSeconds
