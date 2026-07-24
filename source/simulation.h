@@ -511,6 +511,8 @@ unsigned int m_quality_checkpoint_stride;
 	ScalarType m_cs_gradient_dot_descent;
 	unsigned int m_cs_ncg_restart_count;
 	bool m_cs_edge_buffer_dirty;
+	unsigned int m_cs_spring_constraint_count;
+	unsigned int m_cs_attachment_constraint_count;
 	std::size_t m_cs_adaptive_ls_state_buffer_bytes;
 	unsigned int m_cs_adaptive_ls_history_generation;
 

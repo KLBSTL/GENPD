@@ -722,6 +722,8 @@ m_quality_checkpoint_stride = 1;
 	m_ncg_restart_mode = NCG_RESTART_NON_DESCENT;
 	m_ncg_restart_period = 0u;
 	m_cs_edge_buffer_dirty = true;
+	m_cs_spring_constraint_count = 0u;
+	m_cs_attachment_constraint_count = 0u;
 	m_cs_adaptive_ls_state_buffer_bytes = 0;
 	m_cs_adaptive_ls_history_generation = 0u;
 	m_cs_render_position_valid = false;
@@ -986,6 +988,9 @@ void Simulation::rebuildCSAdjacency()
 			0.0f);
 		m_mesh->my_edge.push_back(attachment_edge);
 	}
+
+	m_cs_spring_constraint_count = static_cast<unsigned int>(spring_edges.size());
+	m_cs_attachment_constraint_count = attachment_count;
 
 	const unsigned int vertex_count = static_cast<unsigned int>(m_mesh->m_vertices_number);
 	for (unsigned int edge_index = 0; edge_index < m_mesh->my_edge.size(); ++edge_index)
@@ -2696,7 +2701,7 @@ GenPDEnsureDirectoryForFile(experiment_profile_path);
 experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,constraint_spring_count,constraint_attachment_count,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2820,6 +2825,8 @@ if (experiment_profile_file.is_open())
 			<< GenPDExperimentVariantName() << ","
 			<< ((GenPDExperimentUsesPersistentBuffers() && m_cs_gpu_state_valid) ? 1 : 0) << ","
 			<< (m_force_cs2_cpu_state_roundtrip ? 1 : 0) << ","
+			<< m_cs_spring_constraint_count << ","
+			<< m_cs_attachment_constraint_count << ","
 			<< g_cs_profile_gradient_dispatches << ","
 			<< g_cs_profile_stats_dispatches << ","
 			<< g_cs_profile_reduction_dispatches << ","

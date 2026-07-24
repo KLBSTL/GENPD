@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Validate the traversal and GPU-resident-state explanations in a formal R2 run.
 
-This is a diagnostic analysis, not a paper-result generator. It rejects data that
-do not preserve the controlled comparison contracts and writes a CSV, Markdown
-report, and compact PDF/PNG figure for inspection.
+This remains a historical R2 diagnostic, not a paper-result generator. The
+separately controlled ``run_vertex_owned_microstudy.ps1`` and
+``run_persistent_residency_paper_study.ps1`` protocols are required for the
+current causal figures because they isolate structural dispatch/atomic counts
+and per-frame state traffic, respectively. This script rejects data that do
+not preserve its diagnostic comparison contracts and writes inspection files.
 """
 
 import argparse
