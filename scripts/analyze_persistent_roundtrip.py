@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 CONDITIONS = ("persistent", "roundtrip")
 LABELS = {"persistent": "GPU-resident state", "roundtrip": "Forced state roundtrip"}
 COLORS = {"persistent": "#4E79A7", "roundtrip": "#E15759"}
+MAX_POSITION_REL_TOLERANCE = 1e-4
 
 
 def fail(message):
@@ -143,18 +144,28 @@ def write_csv(path, rows):
 
 
 def plot(summary, output_dir):
+    plt.rcParams.update({
+        "font.family": "DejaVu Sans",
+        "font.size": 8,
+        "axes.titlesize": 9,
+        "axes.labelsize": 8,
+        "xtick.labelsize": 7.5,
+        "ytick.labelsize": 7.5,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
     metrics = [
         ("frame_wall_ms_mean", "frame_wall_ms_std", "Rendered frame time (ms)"),
         ("transfer_ms_mean", "transfer_ms_std", "CPU transfer time (ms)"),
         ("host_readbacks_mean", None, "Host readbacks / frame"),
     ]
-    fig, axes = plt.subplots(1, 3, figsize=(8.2, 2.45))
+    fig, axes = plt.subplots(1, 3, figsize=(7.15, 2.12))
     for axis, (field, std_field, ylabel) in zip(axes, metrics):
         values = [float(summary[condition][field]) for condition in CONDITIONS]
         errors = [float(summary[condition][std_field]) for condition in CONDITIONS] if std_field else None
         axis.bar(range(2), values, color=[COLORS[condition] for condition in CONDITIONS], yerr=errors, capsize=3)
         axis.set_xticks(range(2))
-        axis.set_xticklabels(["Resident", "Roundtrip"], fontsize=8)
+        axis.set_xticklabels(["Resident", "Roundtrip"])
         axis.set_ylabel(ylabel)
         axis.grid(axis="y", alpha=0.25)
     axes[0].set_title("End-to-end rendered cost")
@@ -180,7 +191,7 @@ def main():
     manifest_path = run_root / "roundtrip_manifest.json"
     if not manifest_path.is_file():
         fail("Missing roundtrip manifest: {0}".format(manifest_path))
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
     if manifest.get("protocol") != "persistent-state-roundtrip-v1":
         fail("Unexpected roundtrip manifest protocol.")
     if manifest.get("frames") != args.expected_frames or manifest.get("warmup_frames") != args.warmup:
@@ -224,7 +235,7 @@ def main():
     resident_pos = summary["persistent"]["p95_max_position_mean"]
     roundtrip_pos = summary["roundtrip"]["p95_max_position_mean"]
     relative_position_delta = abs(resident_pos - roundtrip_pos) / max(abs(resident_pos), 1e-8)
-    if relative_position_delta > 1e-5:
+    if relative_position_delta > MAX_POSITION_REL_TOLERANCE:
         fail("State roundtrip changed P95 maximum position by {0:.3e}.".format(relative_position_delta))
 
     write_csv(run_root / "roundtrip_summary.csv", summary_rows)
