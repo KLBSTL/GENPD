@@ -156,7 +156,7 @@ def plot(summary, output_dir):
     })
     metrics = [
         ("frame_wall_ms_mean", "frame_wall_ms_std", "Rendered frame time (ms)"),
-        ("transfer_ms_mean", "transfer_ms_std", "CPU transfer time (ms)"),
+        ("transfer_ms_mean", "transfer_ms_std", "Next-frame CPU upload (ms)"),
         ("host_readbacks_mean", None, "Host readbacks / frame"),
     ]
     fig, axes = plt.subplots(1, 3, figsize=(7.15, 2.12))
@@ -169,7 +169,7 @@ def plot(summary, output_dir):
         axis.set_ylabel(ylabel)
         axis.grid(axis="y", alpha=0.25)
     axes[0].set_title("End-to-end rendered cost")
-    axes[1].set_title("Explicit state-transfer cost")
+    axes[1].set_title("State reupload segment")
     axes[2].set_title("Synchronization pressure")
     fig.tight_layout(pad=0.45)
     for suffix in ("pdf", "png"):
@@ -256,13 +256,13 @@ def main():
         "",
         "- Rendered frame time: {0:.3f} +/- {1:.3f} ms resident versus {2:.3f} +/- {3:.3f} ms forced roundtrip ({4:.2f}x).".format(
             resident["frame_wall_ms_mean"], resident["frame_wall_ms_std"], roundtrip["frame_wall_ms_mean"], roundtrip["frame_wall_ms_std"], ratio),
-        "- CPU transfer time: {0:.3f} versus {1:.3f} ms; host readbacks: {2:.1f} versus {3:.1f} per frame.".format(
+        "- Timed next-frame CPU upload: {0:.3f} versus {1:.3f} ms; host readbacks: {2:.1f} versus {3:.1f} per frame.".format(
             resident["transfer_ms_mean"], roundtrip["transfer_ms_mean"], resident["host_readbacks_mean"], roundtrip["host_readbacks_mean"]),
         "- P95 maximum-position relative difference: {0:.3e}; both conditions completed without invalid frames.".format(relative_position_delta),
         "",
         "## Interpretation boundary",
         "",
-        "This is direct evidence for the cost of abandoning per-frame GPU-resident position/velocity state while retaining the same persistent compute-shader solver. It does not attribute the separate batched-LS-to-persistent variant gap, because that broader variant comparison also changes prediction, state finalization, and solver-control placement.",
+        "The end-to-end frame-time result measures the complete state roundtrip, including the frame-end GPU-to-CPU readback and the following-frame reupload. The separate upload field covers only the latter segment. This is direct evidence for the cost of abandoning per-frame GPU-resident position/velocity state while retaining the same persistent compute-shader solver. It does not attribute the separate batched-LS-to-persistent variant gap, because that broader variant comparison also changes prediction, state finalization, and solver-control placement.",
     ]
     (run_root / "roundtrip_report.md").write_text("\n".join(report) + "\n")
     metadata = {
