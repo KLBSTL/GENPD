@@ -194,13 +194,7 @@ def aggregate_case(run_root, manifest, case):
 
 
 def write_csv(path, rows):
-    fields = [
-        "scene_id", "cloth_dimension", "condition", "frame_wall_ms_mean", "frame_wall_ms_std",
-        "total_ms_mean", "transfer_ms_mean", "readback_wait_ms_mean", "readback_copy_ms_mean",
-        "state_h2d_bytes_mean", "state_d2h_bytes_mean", "state_upload_calls_mean", "state_readback_calls_mean",
-        "host_readbacks_mean", "dispatches_mean", "p95_max_position_mean", "p95_position_rel_l2",
-        "git_commit", "gpu_name", "driver",
-    ]
+    fields = list(rows[0].keys())
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()

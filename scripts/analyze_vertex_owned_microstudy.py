@@ -193,13 +193,7 @@ def aggregate(run_root, manifest, cases):
 
 
 def write_csv(path, rows):
-    fields = [
-        "scene_id", "cloth_dimension", "solver_variant", "frame_wall_ms_mean", "frame_wall_ms_std",
-        "total_ms_mean", "total_ms_std", "gradient_path_gpu_ms_mean", "gradient_path_gpu_ms_std",
-        "constraint_spring_count_mean", "constraint_attachment_count_mean", "gradient_dispatches_mean",
-        "stats_dispatches_mean", "gradient_related_barriers_mean", "full_vector_gradient_passes_mean",
-        "theoretical_scalar_atomic_writes_mean", "p95_position_rel_l2", "git_commit", "gpu_name", "driver",
-    ]
+    fields = list(rows[0].keys())
     with path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
