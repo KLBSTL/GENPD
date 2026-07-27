@@ -125,10 +125,13 @@ namespace
 	bool LooksLikeProjectRoot(const std::string& path)
 	{
 		const std::string root = NormalizePath(path);
+		// A source checkout and a deployed release package share these runtime inputs.
+		// Do not require source\main.cpp here: the packaged executable deliberately
+		// contains only the assets it needs to run.
 		return DirectoryExists(root)
-			&& FileExists(JoinPath(root, "source\\main.cpp"))
 			&& FileExists(JoinPath(root, "shaders\\gradient.comp"))
-			&& FileExists(JoinPath(root, "config\\config.txt"));
+			&& FileExists(JoinPath(root, "config\\config.txt"))
+			&& DirectoryExists(JoinPath(root, "scenes"));
 	}
 
 	void AddCandidate(std::vector<std::string>& candidates, const std::string& candidate)
