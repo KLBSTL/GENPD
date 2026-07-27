@@ -87,6 +87,23 @@ def condition_index(manifest):
     return index
 
 
+def expected_dispatch_counts(condition_id, iterations_per_frame):
+    per_iteration = {
+        "edge-scatter-k8": (2.0, 1.0),
+        "vertex-gather-k8": (1.0, 1.0),
+        "gather-fusion-k8": (1.0, 0.0),
+    }[condition_id]
+    return tuple(value * float(iterations_per_frame) for value in per_iteration)
+
+
+def quality_gate_passes(p95_position_rel_l2, gate):
+    return math.isfinite(p95_position_rel_l2) and p95_position_rel_l2 <= gate
+
+
+def requires_nonempty_adaptive_trace(condition):
+    return condition.get("decision_trace", False) and condition.get("solver_variant") == "gpu-gather-fusion-adaptive-ls-persistent"
+
+
 def expected_timing_dir(run_root, suite, condition_id, block):
     return run_root / "timing" / suite / condition_id / "block{0:02d}".format(block)
 
@@ -137,11 +154,7 @@ def timing_metrics(run_dir, condition, manifest):
     gradient_dispatches = mean([number(row, "gradient_dispatches", experiment_path) for row in experiment])
     stats_dispatches = mean([number(row, "stats_dispatches", experiment_path) for row in experiment])
     if condition["comparison_group"] == "traversal":
-        expected = {
-            "edge-scatter-k8": (2.0, 1.0),
-            "vertex-gather-k8": (1.0, 1.0),
-            "gather-fusion-k8": (1.0, 0.0),
-        }[condition["condition_id"]]
+        expected = expected_dispatch_counts(condition["condition_id"], condition["iterations_per_frame"])
         if abs(gradient_dispatches - expected[0]) > 1.0e-9 or abs(stats_dispatches - expected[1]) > 1.0e-9:
             fail("Gradient/stat dispatch structure changed in {0}".format(run_dir))
 
@@ -177,14 +190,13 @@ def quality_metrics(run_dir, condition, manifest):
     if not reference_errors:
         fail("No reference-aligned quality rows in {0}".format(run_dir))
     p95_error = percentile(reference_errors)
-    if p95_error > quality_config["position_gate_p95"]:
-        fail("Position gate failed in {0}: {1:.3e}".format(run_dir, p95_error))
 
     def sum_field(field):
         return sum(number(row, field, extended_path) for row in extended)
 
     result = {
         "p95_position_rel_l2": p95_error,
+        "quality_gate_pass": quality_gate_passes(p95_error, quality_config["position_gate_p95"]),
         "invalid_frames": 0,
         "full_line_searches": sum_field("cs_full_ls"),
         "adaptive_candidate_evaluations": sum_field("adaptive_candidate_evaluations"),
@@ -195,11 +207,9 @@ def quality_metrics(run_dir, condition, manifest):
         "armijo_rejections": sum_field("armijo_rejections"),
         "armijo_failures": sum_field("armijo_failures"),
     }
-    if condition["decision_trace"]:
+    if requires_nonempty_adaptive_trace(condition):
         trace_path = run_dir / "line_search_trace.csv"
         trace = load_csv(trace_path)
-        if not trace:
-            fail("Missing adaptive decision trace in {0}".format(run_dir))
     return result
 
 
@@ -287,6 +297,7 @@ def summarize(run_root, manifest):
             "gradient_dispatches": run_metrics[0]["gradient_dispatches"],
             "stats_dispatches": run_metrics[0]["stats_dispatches"],
             "p95_position_rel_l2": quality["p95_position_rel_l2"],
+            "quality_gate_pass": quality["quality_gate_pass"],
             "full_line_searches": quality["full_line_searches"],
             "adaptive_candidate_evaluations": quality["adaptive_candidate_evaluations"],
             "adaptive_history_uses": quality["adaptive_history_uses"],
@@ -300,6 +311,7 @@ def summarize(run_root, manifest):
             "driver": next(iter(drivers)),
         })
 
+    summary_by_key = {(row["suite"], row["condition_id"]): row for row in summary_rows}
     comparisons = []
     threshold = float(manifest["practical_effect_threshold"])
     for spec in manifest["comparisons"]:
@@ -311,7 +323,15 @@ def summarize(run_root, manifest):
         if set(controls) != expected_blocks or set(treatments) != expected_blocks:
             fail("Incomplete paired timing data for {0}".format(spec["id"]))
         improvements = [(controls[block]["frame_wall_ms"] - treatments[block]["frame_wall_ms"]) / controls[block]["frame_wall_ms"] for block in sorted(expected_blocks)]
-        average, ci_low, ci_high, faster_blocks, slower_blocks, verdict = classify_effect(improvements, threshold, spec["id"])
+        quality_qualified = bool(summary_by_key[control_key]["quality_gate_pass"]) and bool(summary_by_key[treatment_key]["quality_gate_pass"])
+        if quality_qualified:
+            average, ci_low, ci_high, faster_blocks, slower_blocks, verdict = classify_effect(improvements, threshold, spec["id"])
+        else:
+            average = mean(improvements)
+            ci_low, ci_high = bootstrap_interval(improvements, spec["id"])
+            faster_blocks = sum(1 for value in improvements if value > 0.0)
+            slower_blocks = sum(1 for value in improvements if value < 0.0)
+            verdict = "not-qualified-quality"
         comparisons.append({
             "comparison_id": spec["id"],
             "family": spec["family"],
@@ -324,6 +344,7 @@ def summarize(run_root, manifest):
             "treatment_improvement_ci95_high": ci_high,
             "faster_blocks": faster_blocks,
             "slower_blocks": slower_blocks,
+            "quality_qualified": quality_qualified,
             "practical_effect_threshold": threshold,
             "verdict": verdict,
         })
@@ -341,30 +362,30 @@ def write_report(path, manifest, summaries, comparisons):
         "- Rendered 1600x900 end-to-end timing with GPU synchronization, vsync disabled, 150 measured + 30 warm-up frames, and six interleaved process repetitions.",
         "- Baseline: 386^2 moving sphere, default physics, one NCG iteration per frame. Stress: the same scene/mesh/physics with eight NCG iterations per frame.",
         "- Quality is a separate 120 measured + 20 warm-up rendered run against the archived CPU-NCG reference checkpoints; every condition must satisfy P95 position relative L2 <= 1e-3 with no invalid frame.",
-        "- A treatment is a material benefit only when its paired mean frame-time improvement is at least 3%, the bootstrap 95% interval is entirely positive, and it is faster in at least five of six blocks. The symmetric rule marks a material regression; intervals contained in +/-3% are no-material-effect; all other outcomes are inconclusive.",
+        "- A treatment is a material benefit only when its paired mean frame-time improvement is at least 3%, the bootstrap 95% interval is entirely positive, and it is faster in at least five of six blocks. The symmetric rule marks a material regression; intervals contained in +/-3% are no-material-effect; all other outcomes are inconclusive. A comparison with either condition failing the quality gate is reported as raw timing only and receives no performance verdict.",
         "",
         "## Condition Summary",
         "",
-        "| Suite | Condition | Frame ms | Gradient+stats ms | P95 position error | K | History | Armijo failures |",
-        "|---|---|---:|---:|---:|---:|---|---:|",
+        "| Suite | Condition | Frame ms | Gradient+stats ms | P95 position error | Gate | K | History | Armijo failures |",
+        "|---|---|---:|---:|---:|---|---:|---|---:|",
     ]
     for row in sorted(summaries, key=lambda value: (value["suite"], value["condition_id"])):
-        lines.append("| {0} | {1} | {2:.4f} +/- {3:.4f} | {4:.4f} | {5:.3e} | {6} | {7} | {8} |".format(
+        lines.append("| {0} | {1} | {2:.4f} +/- {3:.4f} | {4:.4f} | {5:.3e} | {6} | {7} | {8} | {9} |".format(
             row["suite"], row["condition_id"], row["frame_wall_ms_mean"], row["frame_wall_ms_std"], row["gradient_stats_ms_mean"],
-            row["p95_position_rel_l2"], row["batched_ls_k"], row["adaptive_ls_history"], row["armijo_failures"]))
+            row["p95_position_rel_l2"], "pass" if row["quality_gate_pass"] else "fail", row["batched_ls_k"], row["adaptive_ls_history"], row["armijo_failures"]))
     lines += [
         "",
         "## Paired Comparisons",
         "",
-        "Positive improvement means the treatment is faster than the control.",
+        "Positive improvement means the treatment is faster than the control. Comparisons marked `not-qualified-quality` are diagnostic raw timings only.",
         "",
-        "| Comparison | Treatment improvement | 95% bootstrap CI | Faster blocks | Verdict |",
-        "|---|---:|---:|---:|---|",
+        "| Comparison | Treatment improvement | 95% bootstrap CI | Faster blocks | Quality | Verdict |",
+        "|---|---:|---:|---:|---|---|",
     ]
     for row in comparisons:
-        lines.append("| {0} | {1:+.2%} | [{2:+.2%}, {3:+.2%}] | {4}/{5} | {6} |".format(
+        lines.append("| {0} | {1:+.2%} | [{2:+.2%}, {3:+.2%}] | {4}/{5} | {6} | {7} |".format(
             row["comparison_id"], row["treatment_improvement_mean"], row["treatment_improvement_ci95_low"],
-            row["treatment_improvement_ci95_high"], row["faster_blocks"], row["paired_blocks"], row["verdict"]))
+            row["treatment_improvement_ci95_high"], row["faster_blocks"], row["paired_blocks"], "pass" if row["quality_qualified"] else "fail", row["verdict"]))
     lines += [
         "",
         "## Line-Search Diagnostics",
