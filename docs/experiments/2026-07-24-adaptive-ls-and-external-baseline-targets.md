@@ -36,9 +36,9 @@ This checkpoint permits only the following additions:
    telemetry;
 4. formal residency and vertex-owned microstudies using the established
    rendered/quality protocol;
-5. a provenance-preserving, same-hardware operating-point reproduction of
-   Wang 2021 without copying third-party source into this repository unless
-   its license permits redistribution;
+5. a provenance-preserving, same-hardware operating-point reproduction of the
+   2024 PeriDyno PPM membrane/contact solver, without copying third-party
+   source into this repository;
 6. protocol-v5, manuscript integration, and a claim-evidence audit driven by
    the resulting data.
 
@@ -66,6 +66,8 @@ On 2026-07-24, the following contracts passed from this baseline:
   use `--no-render` as paper timing evidence.
 - CPU control of iteration, line search, and dispatch remains explicit. The
   accurate phrase is "simulation state GPU-resident", not GPU autonomous.
-- Wang 2021 is external same-hardware operating-point context, not an
-  equal-quality solver ranking unless a separately documented compatible case
-  is achieved.
+- The 2024 PeriDyno PPM baseline is external same-hardware operating-point
+  context, not an equal-quality solver ranking unless a separately documented
+  compatible case is achieved. The official Wang 2021 archive was audited and
+  rejected because it omits the runnable project, scenes, entry point, and
+  required dependencies.
