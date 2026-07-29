@@ -58,7 +58,7 @@ $outputDir = Join-Path $RunRoot 'profile'
 if (-not ((Test-Path -LiteralPath (Join-Path $outputDir 'frame_profile_experiment.csv')) -and -not $Force)) {
     & $benchmarkScript -ProjectRoot $ProjectRoot -RunLabel $RunLabel -OutputDir $outputDir `
         -SolverVariant 'gpu-xpbd-jacobi' -IterationsPerFrame $IterationsPerFrame `
-        -Frames $Frames -Warmup $Warmup -Uncapped -SyncGpu -DisableVsync -ProfileGpuQueries `
+        -Frames $Frames -Warmup $Warmup -Uncapped $true -SyncGpu -DisableVsync -ProfileGpuQueries `
         -RenderWidth $RenderWidth -RenderHeight $RenderHeight -ProcessTimeoutSeconds $ProcessTimeoutSeconds `
         -ExtraArgs @('--scene', 'scenes\moving_sphere_cloth.xml', '--cloth-dimension', $ClothDimension, '--xpbd-fuse-apply-collision', '0', '--xpbd-cached-pins', '1') | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "XPBD stage profile failed: $outputDir" }
