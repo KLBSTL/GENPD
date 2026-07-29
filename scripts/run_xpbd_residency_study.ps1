@@ -16,6 +16,7 @@ param(
     [int]$RenderWidth = 1600,
     [int]$RenderHeight = 900,
     [int]$ProcessTimeoutSeconds = 600,
+    [switch]$VelocityTrajectoryDiagnosticOnly,
     [string]$PythonExe = '',
     [switch]$DryRun,
     [switch]$Force
@@ -54,7 +55,7 @@ function Read-HardwareMetadata {
 New-Item -ItemType Directory -Force -Path $RunRoot | Out-Null
 $commit = (& git -c "safe.directory=$ProjectRoot" -C $ProjectRoot rev-parse HEAD 2>$null | Select-Object -First 1).Trim()
 $manifest = [ordered]@{
-    protocol_version = 'xpbd-residency-v2'
+    protocol_version = if ($VelocityTrajectoryDiagnosticOnly) { 'xpbd-residency-v3' } else { 'xpbd-residency-v2' }
     label = $RunLabel
     git_commit = $commit
     hardware = Read-HardwareMetadata
@@ -68,7 +69,7 @@ $manifest = [ordered]@{
     timing = [ordered]@{ frames = $TimingFrames; warmup = $TimingWarmup; repetitions = $TimingRepetitions }
     trajectory = [ordered]@{ frames = $TrajectoryFrames; warmup = $TrajectoryWarmup; checkpoint_stride = $TrajectoryCheckpointStride; rendered = $true; timing_separate = $true }
     conditions = @('resident', 'forced-cpu-state-roundtrip')
-    acceptance = [ordered]@{ require_finite = $true; require_rendered = $true; position_checkpoint_rel_l2_p95 = 1.0e-3; velocity_checkpoint_rel_l2_p95 = 1.0e-3; require_equal_xpbd_dispatches = $true }
+    acceptance = [ordered]@{ require_finite = $true; require_rendered = $true; position_checkpoint_rel_l2_p95 = 1.0e-3; velocity_checkpoint_rel_l2_p95 = 1.0e-3; require_velocity_checkpoint_gate = (-not $VelocityTrajectoryDiagnosticOnly); require_equal_xpbd_dispatches = $true }
 }
 [System.IO.File]::WriteAllText((Join-Path $RunRoot 'manifest.json'), ($manifest | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
 
