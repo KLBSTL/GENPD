@@ -1217,7 +1217,7 @@ private:
 	bool shouldUseCS2GpuState();
 	void initializeCS2GpuStateIfNeeded();
 	bool predictCS2GpuStateY();
-	bool finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite);
+	bool finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite, bool resolve_collision);
 	void syncCS2GpuStateToCPU();
 	void invalidateCS2GpuState();
 	void ensureAdaptiveLineSearchState();
@@ -1226,7 +1226,7 @@ private:
 	void updateCSStats(bool readback = true);
 	ScalarType readCSStatsFromGPU(bool profile_readback = true);
 	void collisionPostProcessCS(VectorX& x, VectorX& v);
-bool performGPUXPBD(VectorX& x);
+bool performGPUXPBD(VectorX& x, bool use_gpu_resident_state);
 	ScalarType evaluatePotentialEnergyCS(const VectorX& x);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);

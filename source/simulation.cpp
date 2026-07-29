@@ -1774,7 +1774,7 @@ void Simulation::collisionPostProcessCS(VectorX& x, VectorX& v)
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-bool Simulation::performGPUXPBD(VectorX& x)
+bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 {
 	if (!use_cs || !m_mesh || xpbd_constraints_program == 0 || xpbd_apply_program == 0
 		|| m_integration_method != INTEGRATION_IMPLICIT_EULER || sizeof(ScalarType) != sizeof(float))
@@ -1796,7 +1796,10 @@ bool Simulation::performGPUXPBD(VectorX& x)
 	EnsureCSBufferStorage(xpbdLambdaID, lambda_bytes, g_cs_xpbd_lambda_buffer_bytes);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
-	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, x.data());
+	if (!use_gpu_resident_state)
+	{
+		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, x.data());
+	}
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, vertexEdgeOffsetID);
@@ -1821,7 +1824,10 @@ bool Simulation::performGPUXPBD(VectorX& x)
 		{
 			EnsureCSBufferStorage(collisionVelocityID, position_bytes, g_cs_collision_velocity_buffer_bytes);
 			glBindBuffer(GL_SHADER_STORAGE_BUFFER, collisionVelocityID);
-			glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, m_mesh->m_current_velocities.data());
+			if (!use_gpu_resident_state)
+			{
+				glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, position_bytes, m_mesh->m_current_velocities.data());
+			}
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 		}
 	}
@@ -1873,6 +1879,12 @@ bool Simulation::performGPUXPBD(VectorX& x)
 		}
 	}
 
+	if (use_gpu_resident_state)
+	{
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		return true;
+	}
+
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
 	++g_cs_profile_solver_finish_calls;
 	glFinish();
@@ -1917,7 +1929,8 @@ bool Simulation::PrepareCS2RenderBuffers()
 }
 bool Simulation::shouldUseCS2GpuState()
 {
-	if (!GenPDExperimentUsesPersistentBuffers() || !use_cs || !m_mesh || cs2_state_program == 0)
+	const bool uses_resident_state = GenPDExperimentUsesPersistentBuffers() || GenPDExperimentUsesGPUXPBD();
+	if (!uses_resident_state || !use_cs || !m_mesh || cs2_state_program == 0)
 	{
 		return false;
 	}
@@ -2025,7 +2038,7 @@ bool Simulation::predictCS2GpuStateY()
 	return true;
 }
 
-bool Simulation::finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite)
+bool Simulation::finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_displacement, bool& x_is_finite, bool resolve_collision)
 {
 	max_position = 0.0;
 	max_displacement = 0.0;
@@ -2044,7 +2057,7 @@ bool Simulation::finalizeCS2GpuState(ScalarType& max_position, ScalarType& max_d
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 18, csPositionID);
 
-	if (m_processing_collision && m_scene && !m_scene->IsEmpty())
+	if (resolve_collision && m_processing_collision && m_scene && !m_scene->IsEmpty())
 	{
 		uploadCSCollisionPrimitives();
 		if (!m_cs_collision_primitives.empty())
@@ -2823,7 +2836,7 @@ if (experiment_profile_file.is_open())
 	{
 		experiment_profile_file << frame << ","
 			<< GenPDExperimentVariantName() << ","
-			<< ((GenPDExperimentUsesPersistentBuffers() && m_cs_gpu_state_valid) ? 1 : 0) << ","
+			<< (((GenPDExperimentUsesPersistentBuffers() || GenPDExperimentUsesGPUXPBD()) && m_cs_gpu_state_valid) ? 1 : 0) << ","
 			<< (m_force_cs2_cpu_state_roundtrip ? 1 : 0) << ","
 			<< m_cs_spring_constraint_count << ","
 			<< m_cs_attachment_constraint_count << ","
@@ -4369,7 +4382,7 @@ void Simulation::integrateImplicitMethod()
 	myti.Tic();
 	const bool use_cs_ncg = use_cs && GenPDExperimentUsesCSNCG() && (m_optimization_method == OPTIMIZATION_METHOD_NCG);
 	const bool use_gpu_xpbd = use_cs && GenPDExperimentUsesGPUXPBD() && (m_optimization_method == OPTIMIZATION_METHOD_NCG) && (m_integration_method == INTEGRATION_IMPLICIT_EULER);
-	bool use_cs_gpu_state = use_cs_ncg && shouldUseCS2GpuState();
+	bool use_cs_gpu_state = (use_cs_ncg || use_gpu_xpbd) && shouldUseCS2GpuState();
 	if (m_cs_cpu_state_stale && !use_cs_gpu_state)
 	{
 		syncCS2GpuStateToCPU();
@@ -4495,10 +4508,13 @@ void Simulation::integrateImplicitMethod()
 	ScalarType cs_y_upload_ms = 0.0;
 	ScalarType cs_y_to_x_copy_ms = 0.0;
 
-	if (use_cs_ncg)
+	if (use_cs_ncg || use_gpu_xpbd)
 	{
 		uploadCSResourcesIfNeeded();
+	}
 
+	if (use_cs_ncg)
+	{
 		const std::size_t vector_buffer_bytes = static_cast<std::size_t>(m_mesh->m_system_dimension) * sizeof(ScalarType);
 		const std::size_t position_buffer_bytes = vector_buffer_bytes;
 		EnsureCSBufferStorage(gradientID, vector_buffer_bytes, g_cs_gradient_buffer_bytes);
@@ -4593,7 +4609,11 @@ void Simulation::integrateImplicitMethod()
 	g_cs_active_iteration_budget = iteration_budget;
 	g_cs_gpu_state_active_frame = use_cs_gpu_state;
 
-	const bool xpbd_executed = use_gpu_xpbd && performGPUXPBD(x);
+	if (use_gpu_xpbd && use_cs_gpu_state)
+	{
+		use_cs_gpu_state = predictCS2GpuStateY();
+	}
+	const bool xpbd_executed = use_gpu_xpbd && performGPUXPBD(x, use_cs_gpu_state);
 	if (!xpbd_executed)
 	{
 
@@ -4709,7 +4729,7 @@ void Simulation::integrateImplicitMethod()
 	{
 		TimerWrapper gpu_state_timer;
 		gpu_state_timer.Tic();
-		const bool finalized_gpu_state = finalizeCS2GpuState(max_position, max_displacement, x_is_finite);
+		const bool finalized_gpu_state = finalizeCS2GpuState(max_position, max_displacement, x_is_finite, !xpbd_executed);
 		gpu_state_timer.Toc();
 		gpu_state_update_ms = gpu_state_timer.DurationInSeconds() * 1000.0;
 		position_stats_ms = gpu_state_update_ms;
@@ -4813,6 +4833,9 @@ void Simulation::integrateImplicitMethod()
 		// the next frame rebuild its state from CPU position and velocity arrays.
 		syncCS2GpuStateToCPU();
 		invalidateCS2GpuState();
+		// The finalized GPU state already includes damping. Keep the forced roundtrip
+		// counterfactual numerically equivalent by suppressing this frame's CPU damping.
+		m_cs_skip_cpu_damping_once = true;
 	}
 	TimerWrapper update;
 	update.Tic();
@@ -4833,7 +4856,7 @@ void Simulation::integrateImplicitMethod()
 	{
 		collisionPostProcessCS(m_mesh->m_current_positions, m_mesh->m_current_velocities);
 	}
-	m_cs_render_position_valid = use_cs_ncg && !m_last_profile_exploded && !m_force_cs2_cpu_state_roundtrip;
+	m_cs_render_position_valid = (use_cs_ncg || xpbd_executed) && !m_last_profile_exploded && !m_force_cs2_cpu_state_roundtrip;
 
 	colli.Toc();
 	colli.Report("colli", m_verbose_show_optimization_time);

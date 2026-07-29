@@ -1156,7 +1156,7 @@ void parse_command_line(int argc, char** argv)
 				<< "  --run-label NAME            Default output directory becomes results/NAME.\n"
                 << "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
                 << "  --profile-line-search-decisions  Trace Armijo decisions; diagnostic only.\n"
-                << "  --force-cpu-state-roundtrip  Diagnostic: synchronize persistent GPU state each frame.\n"
+                << "  --force-cpu-state-roundtrip  Diagnostic: synchronize GPU-resident position/velocity state each frame.\n"
                 << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
                 << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"

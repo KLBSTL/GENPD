@@ -113,8 +113,8 @@ if ($CaptureFrame -ge 0) {
 if ($NoRender -and $RunLabel -match '^paper-') {
     throw 'Paper-labelled runs must use rendered measurements; --no-render is reserved for diagnostics and short regressions.'
 }
-if ($ForceCpuStateRoundtrip -and $SolverVariant -notin @('gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent')) {
-    throw 'ForceCpuStateRoundtrip is defined only for persistent gather-fusion NCG variants.'
+if ($ForceCpuStateRoundtrip -and $SolverVariant -notin @('gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi')) {
+    throw 'ForceCpuStateRoundtrip is defined only for GPU-resident NCG and XPBD variants.'
 }
 if ($ForceCpuStateRoundtrip -and $RunLabel -match '^paper-') {
     throw 'ForceCpuStateRoundtrip is a diagnostic counterfactual and cannot use a paper-labelled run label.'
@@ -169,15 +169,35 @@ try {
         $argumentLine = ($appArgs | ForEach-Object {
             if ($_ -match '[\s\"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
         }) -join ' '
-        $process = Start-Process -FilePath $ExePath -ArgumentList $argumentLine -WorkingDirectory $ProjectRoot `
-            -RedirectStandardOutput $logPath -RedirectStandardError $stderrPath -PassThru -NoNewWindow
+        # Start-Process inherits duplicate Path/PATH entries from some nested
+        # PowerShell hosts. ProcessStartInfo preserves the environment while
+        # avoiding that dictionary conversion failure.
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = $ExePath
+        $startInfo.Arguments = $argumentLine
+        $startInfo.WorkingDirectory = $ProjectRoot
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw "Unable to start benchmark process: $ExePath"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($ProcessTimeoutSeconds * 1000)) {
             $process.Kill()
             $process.WaitForExit()
+            [System.IO.File]::WriteAllText($logPath, $stdoutTask.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText($stderrPath, $stderrTask.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
             throw "Benchmark exceeded the $ProcessTimeoutSeconds second timeout. Logs: $logPath, $stderrPath"
         }
         $process.WaitForExit()
         $process.Refresh()
+        [System.IO.File]::WriteAllText($logPath, $stdoutTask.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($stderrPath, $stderrTask.GetAwaiter().GetResult(), [System.Text.UTF8Encoding]::new($false))
         $exitCode = $process.ExitCode
         # Preserve complete child logs on disk, but keep a long paper matrix
         # readable in the terminal.
