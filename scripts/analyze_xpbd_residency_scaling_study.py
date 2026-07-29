@@ -101,8 +101,12 @@ def summarize_run(run_dir, condition, dimension, manifest):
         fail("Invalid measured frame in {0}".format(run_dir))
     if any(row.get("rendered") != "1" or row.get("gpu_sync_enabled") != "1" for row in presentation):
         fail("Unrendered measured frame in {0}".format(run_dir))
-    if any(int(number(row, "iterations", profile_path)) != condition["iterations_per_frame"] for row in profile):
-        fail("Unexpected iteration count in {0}".format(run_dir))
+    actual_iterations = [int(number(row, "iterations", profile_path)) for row in profile]
+    if condition["solver_variant"].startswith("gpu-xpbd"):
+        if any(value != condition["iterations_per_frame"] for value in actual_iterations):
+            fail("Unexpected XPBD iteration count in {0}".format(run_dir))
+    elif any(value < 1 or value > condition["iterations_per_frame"] for value in actual_iterations):
+        fail("CPU NCG iteration count lies outside its configured maximum in {0}".format(run_dir))
     finite_rows(profile, ("total_ms", "iteration_ms", "optimization_ms", "update_posvel_ms"), profile_path)
     finite_rows(presentation, ("frame_wall_ms",), presentation_path)
     finite_rows(experiment, ("state_h2d_bytes", "state_d2h_bytes", "state_upload_calls", "state_readback_calls", "host_readbacks"), experiment_path)
@@ -114,6 +118,9 @@ def summarize_run(run_dir, condition, dimension, manifest):
         "solver_variant": condition["solver_variant"],
         "force_cpu_state_roundtrip": int(condition["force_cpu_state_roundtrip"]),
         "iterations_per_frame": condition["iterations_per_frame"],
+        "iterations_actual_mean": mean(actual_iterations),
+        "iterations_actual_min": min(actual_iterations),
+        "iterations_actual_max": max(actual_iterations),
         "comparison_role": condition["comparison_role"],
         "measured_frames": expected,
         "frame_wall_ms_mean": mean([number(row, "frame_wall_ms", presentation_path) for row in presentation]),
@@ -153,8 +160,8 @@ def write_csv(path, rows):
 
 
 def table_row(row):
-    return "| {0} | {1:,} | {2} | {3:.3f} | {4:.3f} | {5:.3f} | {6:.3f} | {7:.3f}/{8:.3f} | {9:.1f} |".format(
-        row["condition"], row["vertices"], row["iterations_per_frame"], row["frame_wall_ms_mean"],
+    return "| {0} | {1:,} | {2}/{3:.1f} | {4:.3f} | {5:.3f} | {6:.3f} | {7:.3f} | {8:.3f}/{9:.3f} | {10:.1f} |".format(
+        row["condition"], row["vertices"], row["iterations_per_frame"], row["iterations_actual_mean"], row["frame_wall_ms_mean"],
         row["frame_wall_ms_p50"], row["frame_wall_ms_p95"], row["optimization_ms_mean"],
         row["state_h2d_mib_mean"], row["state_d2h_mib_mean"], row["xpbd_dispatches_mean"])
 
@@ -209,6 +216,7 @@ def main():
             "cloth_dimension": dimension,
             "resident_vs_forced_speedup": forced["frame_wall_ms_mean"] / resident["frame_wall_ms_mean"],
             "signed_vs_atomic_frame_ratio": signed["frame_wall_ms_mean"] / resident["frame_wall_ms_mean"],
+            "signed_vs_atomic_p50_ratio": signed["frame_wall_ms_p50"] / resident["frame_wall_ms_p50"],
             "signed_vs_atomic_optimization_ratio": signed["optimization_ms_mean"] / resident["optimization_ms_mean"],
         })
     write_csv(run_root / "xpbd_residency_scaling_comparisons.csv", comparison_rows)
@@ -224,19 +232,19 @@ def main():
         "- Scene: moving sphere cloth (`scenes/moving_sphere_cloth.xml`).",
         "- Viewport: {0}x{1}; `--sync-gpu`, `--disable-vsync`, and `--uncapped` were enabled; every timed frame rendered.".format(manifest["measurement"]["render_width"], manifest["measurement"]["render_height"]),
         "- GPU: {0}; driver {1}; commit `{2}`.".format(gpu_name, driver, next(iter(commits))),
-        "- XPBD cases: 32 iterations/frame. CPU context: CPU NCG at 32 iterations/frame.",
+        "- XPBD cases: exactly 32 iterations/frame. CPU context: CPU NCG with a 32-iteration maximum; its early convergence makes the actual iteration count an observed value.",
         "- During timing, quality readback was disabled. All rows below completed with finite state, `frame_valid=1`, and `termination_reason=none`.",
         "",
         "## Results",
         "",
-        "Columns: rendered wall time uses `frame_wall_ms`; GPU optimization is the application's timed solver section; state traffic is MiB/frame; `dispatch` sums XPBD constraint, apply, and collision dispatches. CPU NCG has no XPBD dispatches.",
+        "Columns: `iter max/actual` reports the requested maximum and measured mean actual count; rendered wall time uses `frame_wall_ms`; GPU optimization is the application's timed solver section; state traffic is MiB/frame; `dispatch` sums XPBD constraint, apply, and collision dispatches. CPU NCG has no XPBD dispatches.",
         "",
     ]
     for dimension in manifest["cloth_dimensions"]:
         report += [
             "### {0}x{0} ({1:,} vertices)".format(dimension, dimension * dimension),
             "",
-            "| condition | vertices | iter/frame | mean ms | P50 ms | P95 ms | solver ms | state H2D/D2H MiB | dispatch |",
+            "| condition | vertices | iter max/actual | mean ms | P50 ms | P95 ms | solver ms | state H2D/D2H MiB | dispatch |",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         report += [table_row(row) for row in by_dimension[dimension]]
@@ -244,7 +252,7 @@ def main():
         report += [
             "",
             "- GPU-resident atomic XPBD is `{0:.2f}x` faster than the forced state-roundtrip counterfactual at this resolution.".format(comparison["resident_vs_forced_speedup"]),
-            "- Signed-incidence gather / atomic XPBD ratio: `{0:.2f}x` rendered frame time and `{1:.2f}x` solver time. Values above 1 mean gather is slower.".format(comparison["signed_vs_atomic_frame_ratio"], comparison["signed_vs_atomic_optimization_ratio"]),
+            "- Signed-incidence gather / atomic XPBD ratio: `{0:.2f}x` rendered mean, `{1:.2f}x` rendered P50, and `{2:.2f}x` solver time. Values above 1 mean gather is slower.".format(comparison["signed_vs_atomic_frame_ratio"], comparison["signed_vs_atomic_p50_ratio"], comparison["signed_vs_atomic_optimization_ratio"]),
             "",
         ]
     report += [
@@ -254,6 +262,7 @@ def main():
         "2. **The CPU row is timing context, not a solver ranking.** CPU NCG and XPBD use different update rules and fixed iteration budgets; the CPU row must not be converted into an equal-quality speedup claim. A reference-calibrated CPU/XPBD study remains required for that claim.",
         "3. **Signed gather is an implementation measurement.** It removes the raw gather prototype's full `Edge` fetch in the vertex pass, but does not eliminate the atomic constraint pass. This diagnostic reports its actual end-to-end cost; it is only a positive optimization if its ratio is below 1. The prior 256x256 short checkpoint test establishes atomic/gather numerical equality for the same starting state; these 300-frame timing runs establish validity, not a new long-horizon trajectory gate.",
         "4. **Why a small residency gain is plausible.** The transfer counterfactual changes only two position/velocity transfers per frame, while XPBD still executes three GPU passes per iteration and is commonly dominated by the constraint scatter pass and rendering. A modest difference is therefore still useful causal evidence, but not evidence of the much larger reductions observed when eliminating more CPU-GPU synchronization from a different NCG pipeline.",
+        "5. **No consistent signed-gather speedup is established.** The rendered P50 ratio is retained because desktop presentation has occasional long-tail stalls. If mean wall time and P50 disagree, the result is treated as inconclusive for end-to-end gain and solver time supplies the implementation signal. This diagnostic cannot support a claim that signed gather improves XPBD performance across resolutions.",
         "",
         "## Evidence Boundary",
         "",
