@@ -88,6 +88,12 @@ def relative_l2(values, reference):
     return math.sqrt(difference_sq) / max(math.sqrt(reference_sq), 1.0e-12)
 
 
+def rms(values):
+    if not values:
+        fail("Cannot take an RMS of no values.")
+    return math.sqrt(sum(value * value for value in values) / float(len(values)))
+
+
 def checkpoints(run_dir):
     directory = run_dir / "reference_checkpoints"
     records = {}
@@ -170,6 +176,8 @@ def compare_pair(scene_id, pair_type, left_name, right_name, left, right, minimu
     for frame in shared:
         left_position, left_velocity = left["checkpoint_records"][frame]
         right_position, right_velocity = right["checkpoint_records"][frame]
+        position_difference = [right_value - left_value for left_value, right_value in zip(left_position, right_position)]
+        velocity_difference = [right_value - left_value for left_value, right_value in zip(left_velocity, right_velocity)]
         rows.append({
             "scene_id": scene_id,
             "pair_type": pair_type,
@@ -177,6 +185,10 @@ def compare_pair(scene_id, pair_type, left_name, right_name, left, right, minimu
             "frame": frame,
             "position_rel_l2": relative_l2(right_position, left_position),
             "velocity_rel_l2": relative_l2(right_velocity, left_velocity),
+            "position_difference_rms": rms(position_difference),
+            "position_reference_rms": rms(left_position),
+            "velocity_difference_rms": rms(velocity_difference),
+            "velocity_reference_rms": rms(left_velocity),
         })
     return rows
 
@@ -199,6 +211,8 @@ def pair_summary(rows):
         "velocity_rel_l2_p50": percentile([row["velocity_rel_l2"] for row in rows], 0.50),
         "velocity_rel_l2_p95": percentile([row["velocity_rel_l2"] for row in rows]),
         "velocity_rel_l2_max": max(row["velocity_rel_l2"] for row in rows),
+        "velocity_difference_rms_p95": percentile([row["velocity_difference_rms"] for row in rows]),
+        "velocity_reference_rms_p50": percentile([row["velocity_reference_rms"] for row in rows], 0.50),
     }
 
 
@@ -242,9 +256,12 @@ def main():
             run_rows.append({key: value for key, value in record.items() if key != "checkpoint_records"})
 
     expected_commit = manifest.get("git_commit", "")
-    metadata = {(row["git_commit"], row["gpu_name"], row["driver"]) for row in run_rows}
-    if len(metadata) != 1 or not expected_commit or next(iter(metadata))[0] != expected_commit:
-        fail("Probe runs do not share the manifest commit, GPU, and driver.")
+    commits = {row["git_commit"] for row in run_rows}
+    hardware = {(row["gpu_name"], row["driver"]) for row in run_rows}
+    if len(commits) != 1 or not next(iter(commits)) or not expected_commit or not expected_commit.startswith(next(iter(commits))):
+        fail("Probe runs do not share a commit compatible with the manifest.")
+    if len(hardware) != 1:
+        fail("Probe runs do not share one GPU and driver.")
 
     definition = manifest["comparison_definition"]
     pair_sets = (("within-condition-repeat", definition["repeat_pairs"]), ("across-condition", definition["cross_condition_pairs"]))
@@ -281,13 +298,13 @@ def main():
         "",
         "## Checkpoint Comparison",
         "",
-        "| Scene | Pair type | Pair | Matched checkpoints | Position P95 relative L2 | Velocity P95 relative L2 |",
-        "| --- | --- | --- | ---: | ---: | ---: |",
+        "| Scene | Pair type | Pair | Matched checkpoints | Position P95 relative L2 | Velocity P95 relative L2 | Velocity-difference P95 RMS |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
     ]
     for row in summary_rows:
-        report.append("| {0} | {1} | {2} | {3} | {4:.3e} | {5:.3e} |".format(
+        report.append("| {0} | {1} | {2} | {3} | {4:.3e} | {5:.3e} | {6:.3e} |".format(
             row["scene_id"], row["pair_type"], row["pair"], row["matched_checkpoints"],
-            row["position_rel_l2_p95"], row["velocity_rel_l2_p95"]))
+            row["position_rel_l2_p95"], row["velocity_rel_l2_p95"], row["velocity_difference_rms_p95"]))
 
     report += ["", "## Quality Sanity", "", "| Scene | Condition | P95 mean stretch | P95 max stretch | Maximum penetration |", "| --- | --- | ---: | ---: | ---: |"]
     for row in run_rows:
