@@ -246,7 +246,7 @@ def main():
         "",
         "## Interpretation boundary",
         "",
-        "This is a controlled full-state coherence experiment. It establishes that the same XPBD dispatch sequence avoids host/device state traffic when the simulation state is GPU-resident. CPU still schedules frame iterations and dispatches; the result does not claim GPU-autonomous simulation. The trajectory audit accepts accumulated representation roundoff below the registered position and velocity gates, not bitwise identity.",
+        "This is a controlled full-state coherence experiment. It establishes that the same XPBD dispatch sequence avoids host/device state traffic when the simulation state is GPU-resident. CPU still schedules frame iterations and dispatches; the result does not claim GPU-autonomous simulation. Position relative L2 is the registered trajectory gate; velocity relative L2 is reported alongside stretch and penetration as a diagnostic because representation crossings can accumulate velocity differences without position or constraint-quality divergence.",
     ]
     (run_root / "xpbd_residency_scaling_report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print("Formal XPBD residency scaling summary: {0}".format(run_root / "xpbd_residency_scaling_summary.csv"))
