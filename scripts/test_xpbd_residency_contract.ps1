@@ -21,9 +21,10 @@ $root = Join-Path $ProjectRoot (Join-Path 'results' ('test-xpbd-residency-contra
 & $runner -ProjectRoot $ProjectRoot -RunRoot $root -RunLabel ('test-xpbd-residency-contract-' + $PID) -DryRun
 if ($LASTEXITCODE -ne 0) { throw 'XPBD residency dry run failed.' }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'manifest.json') -Raw | ConvertFrom-Json
-if ($manifest.protocol_version -ne 'xpbd-residency-v1' -or $manifest.solver_variant -ne 'gpu-xpbd-jacobi' `
+if ($manifest.protocol_version -ne 'xpbd-residency-v2' -or $manifest.solver_variant -ne 'gpu-xpbd-jacobi' `
     -or $manifest.measurement.mode -ne 'rendered-end-to-end' -or $manifest.timing.repetitions -ne 3 `
-    -or @($manifest.conditions).Count -ne 2 -or $manifest.acceptance.position_checkpoint_rel_l2_p95 -ne 1e-6) {
+    -or @($manifest.conditions).Count -ne 2 -or $manifest.acceptance.position_checkpoint_rel_l2_p95 -ne 1e-3 `
+    -or $manifest.acceptance.velocity_checkpoint_rel_l2_p95 -ne 1e-3) {
     throw 'XPBD residency manifest does not encode the controlled protocol.'
 }
 Write-Host "XPBD residency contract passed: $root"

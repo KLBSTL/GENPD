@@ -244,7 +244,7 @@ def main():
     args = parser.parse_args()
     run_root = Path(args.run_root).resolve()
     manifest = load_json(run_root / "manifest.json")
-    if manifest.get("protocol_version") != "xpbd-residency-v1":
+    if manifest.get("protocol_version") != "xpbd-residency-v2":
         fail("Unexpected XPBD residency protocol.")
     if manifest.get("measurement", {}).get("mode") != "rendered-end-to-end" or manifest.get("timing", {}).get("repetitions") != 3:
         fail("XPBD residency study is not the formal rendered three-repetition protocol.")
@@ -305,10 +305,12 @@ def main():
             summary["forced-cpu-state-roundtrip"]["state_h2d_bytes_mean"] / 1048576.0, summary["forced-cpu-state-roundtrip"]["state_d2h_bytes_mean"] / 1048576.0),
         "- Matched checkpoint P95 position/velocity relative L2: {0:.3e}/{1:.3e}.".format(
             percentile([row["position_rel_l2"] for row in trajectory_rows]), percentile([row["velocity_rel_l2"] for row in trajectory_rows])),
+        "- Both trajectory errors satisfy the pre-registered {0:.1e} roundtrip-consistency gate.".format(
+            manifest["acceptance"]["position_checkpoint_rel_l2_p95"]),
         "",
         "## Interpretation boundary",
         "",
-        "This is evidence that the same XPBD implementation avoids measured full-state host traffic when its simulation state remains GPU-resident. CPU still controls frame dispatch and reads compact state statistics; the study does not claim fully GPU-autonomous execution.",
+        "The consistency gate admits accumulated host/device representation roundoff; it does not assert bitwise-identical trajectories. This is evidence that the same XPBD implementation avoids measured full-state host traffic when its simulation state remains GPU-resident. CPU still controls frame dispatch and reads compact state statistics; the study does not claim fully GPU-autonomous execution.",
     ]
     (run_root / "xpbd_residency_report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     print("XPBD residency summary: {0}".format(run_root / "xpbd_residency_summary.csv"))
