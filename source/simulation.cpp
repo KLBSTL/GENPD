@@ -93,8 +93,12 @@ namespace
 	ScalarType g_cs_profile_descent_ms = 0.0;
 	ScalarType g_cs_profile_descent_gpu_ms = 0.0;
 	ScalarType g_cs_profile_xpbd_gpu_ms = 0.0;
-	GLuint g_cs_profile_xpbd_query = 0;
-	bool g_cs_profile_xpbd_query_pending = false;
+	ScalarType g_cs_profile_xpbd_constraint_gpu_ms = 0.0;
+	ScalarType g_cs_profile_xpbd_vertex_gpu_ms = 0.0;
+	GLuint g_cs_profile_xpbd_constraint_query = 0;
+	GLuint g_cs_profile_xpbd_vertex_query = 0;
+	bool g_cs_profile_xpbd_constraint_query_pending = false;
+	bool g_cs_profile_xpbd_vertex_query_pending = false;
 	unsigned int g_cs_profile_full_linesearch_calls = 0;
 	unsigned int g_cs_profile_skipped_linesearch_calls = 0;
 	unsigned int g_cs_profile_unit_step_accepts = 0;
@@ -562,6 +566,8 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_descent_ms = 0.0;
 		g_cs_profile_descent_gpu_ms = 0.0;
 		g_cs_profile_xpbd_gpu_ms = 0.0;
+		g_cs_profile_xpbd_constraint_gpu_ms = 0.0;
+		g_cs_profile_xpbd_vertex_gpu_ms = 0.0;
 		g_cs_profile_full_linesearch_calls = 0;
 		g_cs_profile_skipped_linesearch_calls = 0;
 		g_cs_profile_unit_step_accepts = 0;
@@ -1882,19 +1888,27 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 	const GLuint vertex_groups = ComputeCSGradientGroupCount(static_cast<std::size_t>(m_mesh->m_vertices_number));
 	const bool use_fused_apply_collision = use_gpu_collision && m_xpbd_fuse_apply_collision && xpbd_apply_collision_program != 0;
 	const bool profile_xpbd_gpu = GenPDProfileGpuQueriesEnabled();
-	if (profile_xpbd_gpu)
-	{
-		BeginCSGpuTimer(g_cs_profile_xpbd_query);
-	}
 
 	for (unsigned int iteration = 0; iteration < m_iterations_per_frame; ++iteration)
 	{
+		if (profile_xpbd_gpu)
+		{
+			BeginCSGpuTimer(g_cs_profile_xpbd_constraint_query);
+		}
 		{
 			ScopedCSDebugGroup constraint_group("GenPD XPBD constraint Jacobi");
 			glUseProgram(xpbd_constraints_program);
 			++g_cs_profile_xpbd_constraint_dispatches;
 			glDispatchCompute(constraint_groups, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+		}
+		if (profile_xpbd_gpu)
+		{
+			EndCSGpuTimer(g_cs_profile_xpbd_constraint_query_pending);
+			g_cs_profile_xpbd_constraint_gpu_ms += ConsumeCSGpuTimerMs(
+				g_cs_profile_xpbd_constraint_query,
+				g_cs_profile_xpbd_constraint_query_pending);
+			BeginCSGpuTimer(g_cs_profile_xpbd_vertex_query);
 		}
 
 		if (use_fused_apply_collision)
@@ -1955,13 +1969,17 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 			}
 		}
+
+		if (profile_xpbd_gpu)
+		{
+			EndCSGpuTimer(g_cs_profile_xpbd_vertex_query_pending);
+			g_cs_profile_xpbd_vertex_gpu_ms += ConsumeCSGpuTimerMs(
+				g_cs_profile_xpbd_vertex_query,
+				g_cs_profile_xpbd_vertex_query_pending);
+		}
 	}
 
-	if (profile_xpbd_gpu)
-	{
-		EndCSGpuTimer(g_cs_profile_xpbd_query_pending);
-		g_cs_profile_xpbd_gpu_ms += ConsumeCSGpuTimerMs(g_cs_profile_xpbd_query, g_cs_profile_xpbd_query_pending);
-	}
+	g_cs_profile_xpbd_gpu_ms = g_cs_profile_xpbd_constraint_gpu_ms + g_cs_profile_xpbd_vertex_gpu_ms;
 
 	if (use_gpu_resident_state)
 	{
@@ -3004,7 +3022,7 @@ GenPDEnsureDirectoryForFile(experiment_profile_path);
 experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,constraint_spring_count,constraint_attachment_count,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches,xpbd_fused_apply_collision_dispatches,xpbd_gpu_ms\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,constraint_spring_count,constraint_attachment_count,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches,xpbd_fused_apply_collision_dispatches,xpbd_constraint_gpu_ms,xpbd_vertex_gpu_ms,xpbd_gpu_ms\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -3157,6 +3175,8 @@ if (experiment_profile_file.is_open())
 			<< g_cs_xpbd_lambda_buffer_bytes << ","
 			<< g_cs_profile_persistent_collision_dispatches << ","
 			<< g_cs_profile_xpbd_fused_apply_collision_dispatches << ","
+			<< g_cs_profile_xpbd_constraint_gpu_ms << ","
+			<< g_cs_profile_xpbd_vertex_gpu_ms << ","
 			<< g_cs_profile_xpbd_gpu_ms << "\n";
 		experiment_profile_file.flush();
 
