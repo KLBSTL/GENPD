@@ -62,7 +62,8 @@ time changed only from `8.931 ms` to `8.872 ms` (`0.66%`). Three rendered
 30+300-frame repetitions gave `19.442 +/- 1.273 ms` unfused and
 `20.171 +/- 2.557 ms` fused. Fusion is not a performance claim. Constraint
 scatter atomics and the per-iteration barrier, rather than launch count, remain
-the dominant work.
+the dominant work. The fusion switch is therefore disabled by default and kept
+only for controlled A/B experiments.
 
 ## Hard-Pin Cache
 

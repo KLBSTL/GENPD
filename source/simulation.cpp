@@ -738,7 +738,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs_cpu_state_stale = false;
 	m_cs_skip_cpu_damping_once = false;
 	m_force_cs2_cpu_state_roundtrip = false;
-m_xpbd_fuse_apply_collision = true;
+m_xpbd_fuse_apply_collision = false;
 m_xpbd_cached_pins = true;
 
 	m_gradient_shader_file = "./shaders/gradient.comp";

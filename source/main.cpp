@@ -363,7 +363,7 @@ if (g_cli_xpbd_cached_pins >= 0)
 _putenv_s("GENPD_PROFILE_LINE_SEARCH_DECISIONS", g_cli_profile_line_search_decisions ? "1" : "0");
 _putenv_s("GENPD_FORCE_CPU_STATE_ROUNDTRIP", g_cli_force_cpu_state_roundtrip ? "1" : "0");
 _putenv_s("GENPD_ENERGY_AUDIT", g_cli_energy_audit ? "1" : "0");
-_putenv_s("GENPD_XPBD_FUSE_APPLY_COLLISION", g_cli_xpbd_fuse_apply_collision == 0 ? "0" : "1");
+_putenv_s("GENPD_XPBD_FUSE_APPLY_COLLISION", g_cli_xpbd_fuse_apply_collision == 1 ? "1" : "0");
 _putenv_s("GENPD_XPBD_CACHED_PINS", g_cli_xpbd_cached_pins == 0 ? "0" : "1");
 if (g_cli_iterations_per_frame > 0)
 {
@@ -1195,7 +1195,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --profile-line-search-decisions  Trace Armijo decisions; diagnostic only.\n"
                 << "  --force-cpu-state-roundtrip  Diagnostic: synchronize GPU-resident position/velocity state each frame.\n"
                 << "  --energy-audit              Diagnostic: write CPU/GPU energy cross-checks; not performance data.\n"
-                << "  --xpbd-fuse-apply-collision 0|1  Fuse XPBD vertex apply and collision passes (default 1).\n"
+                << "  --xpbd-fuse-apply-collision 0|1  Fuse XPBD vertex apply and collision passes (default 0).\n"
                 << "  --xpbd-cached-pins 0|1     Cache hard-pin lookup instead of scanning CSR each XPBD iteration (default 1).\n"
                 << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
