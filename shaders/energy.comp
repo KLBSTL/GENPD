@@ -93,6 +93,10 @@ void main() {
     }
 
     if (tid == 0u) {
+        // Keep raw terms for diagnostic cross-checks. energy[0] remains the
+        // implicit-Euler objective used by the GPU NCG line-search path.
         energy[0] = m_h * m_h * partial_sums[0].x + partial_sums[0].y;
+        energy[1] = partial_sums[0].x;
+        energy[2] = partial_sums[0].y;
     }
 }

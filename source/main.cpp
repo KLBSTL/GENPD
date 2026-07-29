@@ -157,6 +157,8 @@ unsigned int g_cli_original_iterations_per_frame = 0;
 bool g_cli_profile_gpu_queries = false;
 bool g_cli_profile_line_search_decisions = false;
 bool g_cli_force_cpu_state_roundtrip = false;
+bool g_cli_energy_audit = false;
+int g_cli_xpbd_fuse_apply_collision = -1;
 bool g_cli_print_paths = false;
 
 //----------glut function handlers-----------//
@@ -348,8 +350,15 @@ else if (g_cli_ncg_restart_period > 0)
 }
 g_simulation->SetProfileLineSearchDecisions(g_cli_profile_line_search_decisions);
 g_simulation->SetForceCS2CpuStateRoundtrip(g_cli_force_cpu_state_roundtrip);
+g_simulation->SetEnergyAudit(g_cli_energy_audit);
+if (g_cli_xpbd_fuse_apply_collision >= 0)
+{
+    g_simulation->SetXPBDFuseApplyCollision(g_cli_xpbd_fuse_apply_collision != 0);
+}
 _putenv_s("GENPD_PROFILE_LINE_SEARCH_DECISIONS", g_cli_profile_line_search_decisions ? "1" : "0");
 _putenv_s("GENPD_FORCE_CPU_STATE_ROUNDTRIP", g_cli_force_cpu_state_roundtrip ? "1" : "0");
+_putenv_s("GENPD_ENERGY_AUDIT", g_cli_energy_audit ? "1" : "0");
+_putenv_s("GENPD_XPBD_FUSE_APPLY_COLLISION", g_cli_xpbd_fuse_apply_collision == 0 ? "0" : "1");
 if (g_cli_iterations_per_frame > 0)
 {
     g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
@@ -1136,6 +1145,19 @@ void parse_command_line(int argc, char** argv)
         {
             g_cli_force_cpu_state_roundtrip = true;
         }
+        else if (arg == "--energy-audit")
+        {
+            g_cli_energy_audit = true;
+        }
+        else if (arg == "--xpbd-fuse-apply-collision" && i + 1 < argc)
+        {
+            g_cli_xpbd_fuse_apply_collision = parse_nonnegative_int(argv[++i], g_cli_xpbd_fuse_apply_collision);
+            if (g_cli_xpbd_fuse_apply_collision > 1)
+            {
+                std::cerr << "--xpbd-fuse-apply-collision must be 0 or 1." << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        }
         else if (arg == "--print-paths")
 		{
 			g_cli_print_paths = true;
@@ -1157,6 +1179,8 @@ void parse_command_line(int argc, char** argv)
                 << "  --profile-gpu-queries       Read GL timer queries for GPU profile CSV fields.\n"
                 << "  --profile-line-search-decisions  Trace Armijo decisions; diagnostic only.\n"
                 << "  --force-cpu-state-roundtrip  Diagnostic: synchronize GPU-resident position/velocity state each frame.\n"
+                << "  --energy-audit              Diagnostic: write CPU/GPU energy cross-checks; not performance data.\n"
+                << "  --xpbd-fuse-apply-collision 0|1  Fuse XPBD vertex apply and collision passes (default 1).\n"
                 << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
                 << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"

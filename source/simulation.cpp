@@ -92,6 +92,9 @@ namespace
 	ScalarType g_cs_profile_xupdate_gpu_ms = 0.0;
 	ScalarType g_cs_profile_descent_ms = 0.0;
 	ScalarType g_cs_profile_descent_gpu_ms = 0.0;
+	ScalarType g_cs_profile_xpbd_gpu_ms = 0.0;
+	GLuint g_cs_profile_xpbd_query = 0;
+	bool g_cs_profile_xpbd_query_pending = false;
 	unsigned int g_cs_profile_full_linesearch_calls = 0;
 	unsigned int g_cs_profile_skipped_linesearch_calls = 0;
 	unsigned int g_cs_profile_unit_step_accepts = 0;
@@ -114,6 +117,7 @@ namespace
 	unsigned int g_cs_profile_xpbd_constraint_dispatches = 0;
 	unsigned int g_cs_profile_xpbd_apply_dispatches = 0;
 	unsigned int g_cs_profile_xpbd_collision_dispatches = 0;
+	unsigned int g_cs_profile_xpbd_fused_apply_collision_dispatches = 0;
 	unsigned int g_cs_profile_persistent_collision_dispatches = 0;
 	unsigned int g_cs_profile_host_readbacks = 0;
 	unsigned int g_cs_profile_solver_finish_calls = 0;
@@ -557,6 +561,7 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_xupdate_gpu_ms = 0.0;
 		g_cs_profile_descent_ms = 0.0;
 		g_cs_profile_descent_gpu_ms = 0.0;
+		g_cs_profile_xpbd_gpu_ms = 0.0;
 		g_cs_profile_full_linesearch_calls = 0;
 		g_cs_profile_skipped_linesearch_calls = 0;
 		g_cs_profile_unit_step_accepts = 0;
@@ -579,6 +584,7 @@ ScalarType VectorInfinityNorm(const VectorX& x)
 		g_cs_profile_xpbd_constraint_dispatches = 0;
 		g_cs_profile_xpbd_apply_dispatches = 0;
 		g_cs_profile_xpbd_collision_dispatches = 0;
+		g_cs_profile_xpbd_fused_apply_collision_dispatches = 0;
 		g_cs_profile_persistent_collision_dispatches = 0;
 		g_cs_profile_host_readbacks = 0;
 		g_cs_profile_solver_finish_calls = 0;
@@ -684,6 +690,7 @@ Simulation::Simulation()
 	m_verbose_show_factorization_warning = true;
 	m_profile_logging_enabled = true;
 m_quality_metrics_enabled = false;
+m_energy_audit_enabled = false;
 m_profile_line_search_decisions = false;
 m_quality_checkpoint_stride = 1;
 	m_last_profile_used_cs_ncg = false;
@@ -731,6 +738,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs_cpu_state_stale = false;
 	m_cs_skip_cpu_damping_once = false;
 	m_force_cs2_cpu_state_roundtrip = false;
+m_xpbd_fuse_apply_collision = true;
 
 	m_gradient_shader_file = "./shaders/gradient.comp";
 	m_gradient_scatter_shader_file = "./shaders/gradient_scatter.comp";
@@ -747,6 +755,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs2_state_shader_file = "./shaders/cs2State.comp";
 	m_xpbd_constraints_shader_file = "./shaders/xpbd_constraints.comp";
 	m_xpbd_apply_shader_file = "./shaders/xpbd_apply.comp";
+m_xpbd_apply_collision_shader_file = "./shaders/xpbd_apply_collision.comp";
 	m_adaptive_ls_reset_shader_file = "./shaders/adaptive_ls_reset.comp";
 
 
@@ -869,6 +878,7 @@ void Simulation::set_shader()
 	compile_compute_program(cs2_state_shader, cs2_state_program, load_shader_source(m_cs2_state_shader_file, ""), "CS2 GPU state compute shader");
 	compile_compute_program(xpbd_constraints_shader, xpbd_constraints_program, load_shader_source(m_xpbd_constraints_shader_file, ""), "XPBD constraint compute shader");
 	compile_compute_program(xpbd_apply_shader, xpbd_apply_program, load_shader_source(m_xpbd_apply_shader_file, ""), "XPBD apply compute shader");
+	compile_compute_program(xpbd_apply_collision_shader, xpbd_apply_collision_program, load_shader_source(m_xpbd_apply_collision_shader_file, ""), "XPBD fused apply/collision compute shader");
 	compile_compute_program(adaptive_ls_reset_shader, adaptive_ls_reset_program, load_shader_source(m_adaptive_ls_reset_shader_file, ""), "adaptive line-search reset compute shader");
 }
 
@@ -1846,6 +1856,13 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 
 	const GLuint constraint_groups = ComputeCSPartialGroupCount(static_cast<std::size_t>(m_mesh->my_edge.size()));
 	const GLuint vertex_groups = ComputeCSGradientGroupCount(static_cast<std::size_t>(m_mesh->m_vertices_number));
+	const bool use_fused_apply_collision = use_gpu_collision && m_xpbd_fuse_apply_collision && xpbd_apply_collision_program != 0;
+	const bool profile_xpbd_gpu = GenPDProfileGpuQueriesEnabled();
+	if (profile_xpbd_gpu)
+	{
+		BeginCSGpuTimer(g_cs_profile_xpbd_query);
+	}
+
 	for (unsigned int iteration = 0; iteration < m_iterations_per_frame; ++iteration)
 	{
 		{
@@ -1855,28 +1872,62 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 			glDispatchCompute(constraint_groups, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 		}
+
+		if (use_fused_apply_collision)
 		{
-			ScopedCSDebugGroup apply_group("GenPD XPBD vertex apply");
-			glUseProgram(xpbd_apply_program);
-			++g_cs_profile_xpbd_apply_dispatches;
-			glDispatchCompute(vertex_groups, 1, 1);
-			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
-		}
-		if (use_gpu_collision)
-		{
-			ScopedCSDebugGroup collision_group("GenPD XPBD collision resolve");
-			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+			ScopedCSDebugGroup fused_group("GenPD XPBD vertex apply and collision fused");
+			static GLint fused_primitive_count_location = -1;
+			static GLint fused_restitution_location = -1;
+			static GLint fused_friction_location = -1;
+			if (fused_primitive_count_location < 0)
+			{
+				fused_primitive_count_location = glGetUniformLocation(xpbd_apply_collision_program, "primitive_count");
+				fused_restitution_location = glGetUniformLocation(xpbd_apply_collision_program, "restitution_coefficient");
+				fused_friction_location = glGetUniformLocation(xpbd_apply_collision_program, "friction_coefficient");
+			}
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, collisionPrimitiveID);
-			glUseProgram(collision_resolve_program);
-			glUniform1ui(collision_vertex_count_location, static_cast<GLuint>(m_mesh->m_vertices_number));
-			glUniform1ui(collision_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
-			glUniform1f(collision_restitution_location, static_cast<float>(m_restitution_coefficient));
-			glUniform1f(collision_friction_location, static_cast<float>(m_friction_coefficient));
+			glUseProgram(xpbd_apply_collision_program);
+			glUniform1ui(fused_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
+			glUniform1f(fused_restitution_location, static_cast<float>(m_restitution_coefficient));
+			glUniform1f(fused_friction_location, static_cast<float>(m_friction_coefficient));
+			++g_cs_profile_xpbd_apply_dispatches;
 			++g_cs_profile_xpbd_collision_dispatches;
+			++g_cs_profile_xpbd_fused_apply_collision_dispatches;
 			glDispatchCompute(vertex_groups, 1, 1);
 			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 		}
+		else
+		{
+			{
+				ScopedCSDebugGroup apply_group("GenPD XPBD vertex apply");
+				glUseProgram(xpbd_apply_program);
+				++g_cs_profile_xpbd_apply_dispatches;
+				glDispatchCompute(vertex_groups, 1, 1);
+				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+			}
+			if (use_gpu_collision)
+			{
+				ScopedCSDebugGroup collision_group("GenPD XPBD collision resolve");
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
+				glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, collisionPrimitiveID);
+				glUseProgram(collision_resolve_program);
+				glUniform1ui(collision_vertex_count_location, static_cast<GLuint>(m_mesh->m_vertices_number));
+				glUniform1ui(collision_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
+				glUniform1f(collision_restitution_location, static_cast<float>(m_restitution_coefficient));
+				glUniform1f(collision_friction_location, static_cast<float>(m_friction_coefficient));
+				++g_cs_profile_xpbd_collision_dispatches;
+				glDispatchCompute(vertex_groups, 1, 1);
+				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+			}
+		}
+	}
+
+	if (profile_xpbd_gpu)
+	{
+		EndCSGpuTimer(g_cs_profile_xpbd_query_pending);
+		g_cs_profile_xpbd_gpu_ms += ConsumeCSGpuTimerMs(g_cs_profile_xpbd_query, g_cs_profile_xpbd_query_pending);
 	}
 
 	if (use_gpu_resident_state)
@@ -2274,6 +2325,9 @@ Simulation::~Simulation()
 	glDeleteShader(xpbd_apply_shader);
 	glDeleteProgram(xpbd_apply_program);
 
+	glDeleteShader(xpbd_apply_collision_shader);
+	glDeleteProgram(xpbd_apply_collision_program);
+
 	glDeleteShader(adaptive_ls_reset_shader);
 	glDeleteProgram(adaptive_ls_reset_program);
 
@@ -2666,6 +2720,203 @@ void Simulation::SetForceCS2CpuStateRoundtrip(bool enabled)
 	m_force_cs2_cpu_state_roundtrip = enabled;
 }
 
+void Simulation::SetEnergyAudit(bool enabled)
+{
+	m_energy_audit_enabled = enabled;
+}
+
+void Simulation::SetXPBDFuseApplyCollision(bool enabled)
+{
+	m_xpbd_fuse_apply_collision = enabled;
+}
+
+void Simulation::LogXPBDEnergyAudit(unsigned int frame)
+{
+	if (!m_energy_audit_enabled || !m_mesh || !use_cs || !GenPDExperimentUsesGPUXPBD()
+		|| m_cs_mass_diagonal.size() != static_cast<std::size_t>(m_mesh->m_system_dimension))
+	{
+		return;
+	}
+
+	static bool initialized = false;
+	static std::ofstream audit_file;
+	if (!initialized)
+	{
+		const std::string audit_path = GenPDResolveOutputPath("xpbd_energy_audit.csv");
+		GenPDEnsureDirectoryForFile(audit_path);
+		audit_file.open(audit_path.c_str(), std::ios::out | std::ios::trunc);
+		if (audit_file.is_open())
+		{
+			audit_file << "frame,solver_variant,finite,inertia_energy,spring_energy,attachment_energy,constraint_energy,implicit_objective_cpu,implicit_objective_gpu,gpu_constraint_energy,gpu_inertia_energy,objective_gpu_rel_error,external_potential,physical_potential,kinetic_energy,mechanical_total_energy,constraint_l2,constraint_max_abs,analytic_directional_derivative,fd_directional_derivative,directional_derivative_rel_error,collision_projection_active\n";
+			audit_file.flush();
+		}
+		initialized = true;
+	}
+	if (!audit_file.is_open())
+	{
+		return;
+	}
+
+	if (m_cs_cpu_state_stale)
+	{
+		syncCS2GpuStateToCPU();
+	}
+
+	const int dimension = m_mesh->m_system_dimension;
+	VectorX y(dimension);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_yID);
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<std::size_t>(dimension) * sizeof(ScalarType), y.data());
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	const VectorX& x = m_mesh->m_current_positions;
+	const VectorX& velocity = m_mesh->m_current_velocities;
+	VectorX external_force(dimension);
+	for (unsigned int vertex = 0; vertex < m_mesh->m_vertices_number; ++vertex)
+	{
+		const unsigned int base = vertex * 3u;
+		external_force[base] = m_cs_mass_diagonal[base] * m_wind_x;
+		external_force[base + 1u] = m_cs_mass_diagonal[base + 1u] * (-m_gravity_constant + m_wind_y);
+		external_force[base + 2u] = m_cs_mass_diagonal[base + 2u] * m_wind_z;
+	}
+
+	auto objective_only = [this, &y](const VectorX& positions) -> ScalarType
+	{
+		ScalarType inertia = 0.0;
+		for (int component = 0; component < positions.size(); ++component)
+		{
+			const ScalarType delta = positions[component] - y[component];
+			inertia += static_cast<ScalarType>(0.5) * m_cs_mass_diagonal[component] * delta * delta;
+		}
+		ScalarType constraint = 0.0;
+		for (std::vector<Edge>::const_iterator edge_it = m_mesh->my_edge.begin(); edge_it != m_mesh->my_edge.end(); ++edge_it)
+		{
+			const Edge& edge = *edge_it;
+			const ScalarType stiffness = static_cast<ScalarType>(edge.stiffness);
+			if (edge.fixed_point == 1)
+			{
+				const EigenVector3 fixed_point(edge.fixed_.x, edge.fixed_.y, edge.fixed_.z);
+				constraint += static_cast<ScalarType>(0.5) * stiffness * (positions.block_vector(edge.m_v1) - fixed_point).squaredNorm();
+			}
+			else
+			{
+				const ScalarType stretch = (positions.block_vector(edge.m_v1) - positions.block_vector(edge.m_v2)).norm() - edge.rest_length;
+				constraint += static_cast<ScalarType>(0.5) * stiffness * stretch * stretch;
+			}
+		}
+		return inertia + m_h * m_h * constraint;
+	};
+
+	ScalarType inertia_energy = 0.0;
+	ScalarType spring_energy = 0.0;
+	ScalarType attachment_energy = 0.0;
+	ScalarType constraint_sq_sum = 0.0;
+	ScalarType constraint_max_abs = 0.0;
+	VectorX objective_gradient(dimension);
+	objective_gradient.setZero();
+	for (int component = 0; component < dimension; ++component)
+	{
+		const ScalarType delta = x[component] - y[component];
+		inertia_energy += static_cast<ScalarType>(0.5) * m_cs_mass_diagonal[component] * delta * delta;
+		objective_gradient[component] = m_cs_mass_diagonal[component] * delta;
+	}
+	for (std::vector<Edge>::const_iterator edge_it = m_mesh->my_edge.begin(); edge_it != m_mesh->my_edge.end(); ++edge_it)
+	{
+		const Edge& edge = *edge_it;
+		const ScalarType stiffness = static_cast<ScalarType>(edge.stiffness);
+		if (edge.fixed_point == 1)
+		{
+			const EigenVector3 fixed_point(edge.fixed_.x, edge.fixed_.y, edge.fixed_.z);
+			const EigenVector3 delta = x.block_vector(edge.m_v1) - fixed_point;
+			attachment_energy += static_cast<ScalarType>(0.5) * stiffness * delta.squaredNorm();
+			constraint_sq_sum += delta.squaredNorm();
+			constraint_max_abs = std::max(constraint_max_abs, delta.cwiseAbs().maxCoeff());
+			objective_gradient.block_vector(edge.m_v1) += m_h * m_h * stiffness * delta;
+		}
+		else
+		{
+			const EigenVector3 delta = x.block_vector(edge.m_v1) - x.block_vector(edge.m_v2);
+			const ScalarType length = delta.norm();
+			const ScalarType stretch = length - edge.rest_length;
+			spring_energy += static_cast<ScalarType>(0.5) * stiffness * stretch * stretch;
+			constraint_sq_sum += stretch * stretch;
+			constraint_max_abs = std::max(constraint_max_abs, std::abs(stretch));
+			if (length > static_cast<ScalarType>(1.0e-12))
+			{
+				const EigenVector3 gradient = m_h * m_h * stiffness * stretch * delta / length;
+				objective_gradient.block_vector(edge.m_v1) += gradient;
+				objective_gradient.block_vector(edge.m_v2) -= gradient;
+			}
+		}
+	}
+	const ScalarType constraint_energy = spring_energy + attachment_energy;
+	const ScalarType implicit_objective_cpu = inertia_energy + m_h * m_h * constraint_energy;
+
+	float gpu_energy[3] = { 0.0f, 0.0f, 0.0f };
+	EnsureCSBufferStorage(energyID, 3u * sizeof(float), g_cs_energy_buffer_bytes);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+	glUseProgram(energy_program);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(gpu_energy), gpu_energy);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+	VectorX direction(dimension);
+	for (int component = 0; component < dimension; ++component)
+	{
+		direction[component] = static_cast<ScalarType>((component * 17) % 23) - static_cast<ScalarType>(11.0);
+	}
+	const ScalarType direction_norm = direction.norm();
+	if (direction_norm > static_cast<ScalarType>(0.0))
+	{
+		direction /= direction_norm;
+	}
+	const ScalarType finite_difference_epsilon = static_cast<ScalarType>(1.0e-4) * std::max(static_cast<ScalarType>(1.0), x.cwiseAbs().maxCoeff());
+	const ScalarType analytic_directional_derivative = objective_gradient.dot(direction);
+	const ScalarType fd_directional_derivative = (objective_only(x + finite_difference_epsilon * direction) - objective_only(x - finite_difference_epsilon * direction))
+		/ (static_cast<ScalarType>(2.0) * finite_difference_epsilon);
+	const ScalarType objective_gpu_rel_error = std::abs(static_cast<ScalarType>(gpu_energy[0]) - implicit_objective_cpu)
+		/ std::max(static_cast<ScalarType>(1.0e-6), std::max(std::abs(static_cast<ScalarType>(gpu_energy[0])), std::abs(implicit_objective_cpu)));
+	const ScalarType directional_derivative_rel_error = std::abs(fd_directional_derivative - analytic_directional_derivative)
+		/ std::max(static_cast<ScalarType>(1.0e-6), std::max(std::abs(fd_directional_derivative), std::abs(analytic_directional_derivative)));
+	const ScalarType external_potential = -external_force.dot(x);
+	ScalarType kinetic_energy = 0.0;
+	for (int component = 0; component < dimension; ++component)
+	{
+		kinetic_energy += static_cast<ScalarType>(0.5) * m_cs_mass_diagonal[component] * velocity[component] * velocity[component];
+	}
+	const ScalarType physical_potential = constraint_energy + external_potential;
+	const bool finite = GenPDVectorIsFinite(x) && GenPDVectorIsFinite(velocity)
+		&& std::isfinite(implicit_objective_cpu) && std::isfinite(static_cast<ScalarType>(gpu_energy[0]));
+	audit_file << frame << ","
+		<< GenPDExperimentVariantName() << ","
+		<< (finite ? 1 : 0) << ","
+		<< inertia_energy << ","
+		<< spring_energy << ","
+		<< attachment_energy << ","
+		<< constraint_energy << ","
+		<< implicit_objective_cpu << ","
+		<< gpu_energy[0] << ","
+		<< gpu_energy[1] << ","
+		<< gpu_energy[2] << ","
+		<< objective_gpu_rel_error << ","
+		<< external_potential << ","
+		<< physical_potential << ","
+		<< kinetic_energy << ","
+		<< physical_potential + kinetic_energy << ","
+		<< std::sqrt(constraint_sq_sum) << ","
+		<< constraint_max_abs << ","
+		<< analytic_directional_derivative << ","
+		<< fd_directional_derivative << ","
+		<< directional_derivative_rel_error << ","
+		<< (m_processing_collision ? 1 : 0) << "\n";
+	audit_file.flush();
+}
+
 void Simulation::LogFrameProfile(unsigned int frame, ScalarType fps_average, ScalarType fps_instant)
 {
 	if (!m_profile_logging_enabled)
@@ -2714,7 +2965,7 @@ GenPDEnsureDirectoryForFile(experiment_profile_path);
 experiment_profile_file.open(experiment_profile_path.c_str(), std::ios::out | std::ios::trunc);
 if (experiment_profile_file.is_open())
 		{
-			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,constraint_spring_count,constraint_attachment_count,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches\n";
+			experiment_profile_file << "frame,solver_variant,persistent_buffers_active,forced_cpu_state_roundtrip,constraint_spring_count,constraint_attachment_count,gradient_dispatches,stats_dispatches,reduction_dispatches,xupdate_dispatches,descent_dispatches,full_linesearch_calls,skipped_linesearch_calls,host_readbacks,solver_gl_finish_calls,state_h2d_bytes,state_d2h_bytes,state_upload_calls,state_readback_calls,tracked_buffer_bytes,gradient_buffer_bytes,descent_buffer_bytes,x_buffer_bytes,y_buffer_bytes,scratch_buffer_bytes,state_position_buffer_bytes,xpbd_constraint_dispatches,xpbd_apply_dispatches,xpbd_collision_dispatches,xpbd_delta_buffer_bytes,xpbd_lambda_buffer_bytes,persistent_collision_dispatches,xpbd_fused_apply_collision_dispatches,xpbd_gpu_ms\n";
 			experiment_profile_file.flush();
 		}
 		if (m_quality_metrics_enabled)
@@ -2865,7 +3116,9 @@ if (experiment_profile_file.is_open())
 			<< g_cs_profile_xpbd_collision_dispatches << ","
 			<< g_cs_xpbd_delta_buffer_bytes << ","
 			<< g_cs_xpbd_lambda_buffer_bytes << ","
-			<< g_cs_profile_persistent_collision_dispatches << "\n";
+			<< g_cs_profile_persistent_collision_dispatches << ","
+			<< g_cs_profile_xpbd_fused_apply_collision_dispatches << ","
+			<< g_cs_profile_xpbd_gpu_ms << "\n";
 		experiment_profile_file.flush();
 
 }
@@ -2926,6 +3179,11 @@ if (m_quality_metrics_enabled && quality_profile_file.is_open() && m_mesh)
         << reference_penetration << "\n";
     quality_profile_file.flush();
 }
+
+    if (m_energy_audit_enabled)
+    {
+        LogXPBDEnergyAudit(frame);
+    }
 }
 
 void Simulation::GetOverlayChar(char* overlay, unsigned int size)
@@ -5962,51 +6220,36 @@ ScalarType Simulation::evaluatePotentialEnergyCS(const VectorX& x)
 {
 	if (!use_cs)
 	{
-		ScalarType energy = evaluateEnergyPureConstraint(x, m_external_force);
-		energy -= m_external_force.dot(x);
-		return energy;
+		return evaluateEnergyPureConstraint(x, m_external_force) - m_external_force.dot(x);
 	}
 
+	// The compute shader reports both the implicit-Euler objective and its raw
+	// constraint term. Physical potential is the latter minus external work;
+	// inertia and h^2 intentionally do not belong here.
 	uploadCSResourcesIfNeeded();
+	const std::size_t vector_bytes = static_cast<std::size_t>(x.size()) * sizeof(ScalarType);
+	EnsureCSBufferStorage(xID, vector_bytes, g_cs_x_buffer_bytes);
+	EnsureCSBufferStorage(m_yID, vector_bytes, g_cs_y_buffer_bytes);
+	EnsureCSBufferStorage(energyID, 3u * sizeof(float), g_cs_energy_buffer_bytes);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, xID);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, x.size() * sizeof(ScalarType), x.data(), GL_DYNAMIC_DRAW);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
-
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_bytes, x.data());
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_yID);
-	glBufferData(GL_SHADER_STORAGE_BUFFER, m_y.size() * sizeof(ScalarType), m_y.data(), GL_DYNAMIC_DRAW);
-	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
-
-	const GLuint inertia_partial_group_count = ComputeCSPartialGroupCount(static_cast<std::size_t>(comp_params.gradient_size));
-	const GLuint energy_partial_group_count = ComputeCSPartialGroupCount(static_cast<std::size_t>(comp_params.edge_size));
-	const GLuint objective_partial_group_count = std::max(inertia_partial_group_count, energy_partial_group_count);
-	EnsureFloatScratchBuffer(
-		testID,
-		test_,
-		static_cast<std::size_t>(objective_partial_group_count));
-
+	glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, vector_bytes, m_y.data());
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, xID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, energyID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_yID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+	glUseProgram(energy_program);
+	glDispatchCompute(1, 1, 1);
+	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
 
-	comp_params.t0 = 0.0f;
-	glBindBuffer(GL_UNIFORM_BUFFER, pUBO);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(comp_params), &comp_params);
-	glBindBufferBase(GL_UNIFORM_BUFFER, 0, pUBO);
-	glUseProgram(energy_for_linesearch_program);
-	glDispatchCompute(1, objective_partial_group_count, 1);
-	glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-	DispatchCSReduction(compute_program, testID, energyID, objective_partial_group_count, 1u);
-
-	ScalarType energy = 0.0;
+	float gpu_energy[3] = { 0.0f, 0.0f, 0.0f };
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, energyID);
-	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(ScalarType), &energy);
-
-	if (m_processing_collision)
-	{
-		energy += evaluateEnergyCollision(x);
-	}
-
-	energy -= m_external_force.dot(x);
-	return energy;
+	glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(gpu_energy), gpu_energy);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	return static_cast<ScalarType>(gpu_energy[1]) - m_external_force.dot(x);
 }
 
 ScalarType Simulation::evaluateEnergyAndGradient(const VectorX& x, VectorX& gradient)

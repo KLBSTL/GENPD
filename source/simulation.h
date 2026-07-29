@@ -276,6 +276,8 @@ inline unsigned int IterationsPerFrame() const { return m_iterations_per_frame; 
 	void SetNCGRestart(NCGRestartMode mode, unsigned int period);
 	void SetProfileLineSearchDecisions(bool enabled);
 	void SetForceCS2CpuStateRoundtrip(bool enabled);
+	void SetEnergyAudit(bool enabled);
+	void SetXPBDFuseApplyCollision(bool enabled);
 protected:
 
 	// simulation constants
@@ -442,6 +444,7 @@ protected:
 	bool m_verbose_show_factorization_warning;
 	bool m_profile_logging_enabled;
 bool m_quality_metrics_enabled;
+bool m_energy_audit_enabled;
 bool m_profile_line_search_decisions;
 std::string m_reference_export_dir;
 std::string m_quality_reference_dir;
@@ -487,10 +490,10 @@ unsigned int m_quality_checkpoint_stride;
 	bool use_cs = true;
 	GLuint gradient_shader, gradient_scatter_shader, gradient_finalize_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
-		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader, adaptive_ls_reset_shader;
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader, xpbd_apply_collision_shader, adaptive_ls_reset_shader;
 
 	GLuint gradient_program, gradient_scatter_program, gradient_finalize_program, energy_program, computeX_program, descent_program, iner_program,
-		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program, adaptive_ls_reset_program;
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program, xpbd_apply_collision_program, adaptive_ls_reset_program;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
 	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
@@ -500,6 +503,7 @@ unsigned int m_quality_checkpoint_stride;
 	bool m_cs_cpu_state_stale;
 	bool m_cs_skip_cpu_damping_once;
 	bool m_force_cs2_cpu_state_roundtrip;
+bool m_xpbd_fuse_apply_collision;
 
 
 	std::vector<float> test_;
@@ -1174,6 +1178,7 @@ void main() {
 	std::string m_cs2_state_shader_file;
 std::string m_xpbd_constraints_shader_file;
 std::string m_xpbd_apply_shader_file;
+std::string m_xpbd_apply_collision_shader_file;
 std::string m_adaptive_ls_reset_shader_file;
 
 
@@ -1227,6 +1232,7 @@ private:
 	ScalarType readCSStatsFromGPU(bool profile_readback = true);
 	void collisionPostProcessCS(VectorX& x, VectorX& v);
 bool performGPUXPBD(VectorX& x, bool use_gpu_resident_state);
+	void LogXPBDEnergyAudit(unsigned int frame);
 	ScalarType evaluatePotentialEnergyCS(const VectorX& x);
 	bool performNCG(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);
 	bool performNCG_LBFGS(VectorX& x, ScalarType& beta, VectorX& gradient_dir, VectorX& descent_dir);

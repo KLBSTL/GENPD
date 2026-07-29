@@ -445,10 +445,12 @@ void GenPDWriteRunMetadata(
 	out << "    \"batched_ls_k\": \"" << JsonEscape(EnvValue("GENPD_BATCHED_LS_K")) << "\",\n";
 	out << "    \"armijo_beta\": \"" << JsonEscape(EnvValue("GENPD_ARMIJO_BETA")) << "\",\n";
 	out << "    \"adaptive_ls_history\": \"" << JsonEscape(EnvValue("GENPD_ADAPTIVE_LS_HISTORY")) << "\",\n";
-	out << "    \"ncg_restart_mode\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_MODE")) << "\",\n";
-	out << "    \"ncg_restart_period\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_PERIOD")) << "\",\n";
+    out << "    \"ncg_restart_mode\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_MODE")) << "\",\n";
+    out << "    \"ncg_restart_period\": \"" << JsonEscape(EnvValue("GENPD_NCG_RESTART_PERIOD")) << "\",\n";
     out << "    \"force_cpu_state_roundtrip\": \"" << JsonEscape(EnvValue("GENPD_FORCE_CPU_STATE_ROUNDTRIP")) << "\",\n";
-	out << "    \"line_search_decisions_profiled\": \"" << JsonEscape(EnvValue("GENPD_PROFILE_LINE_SEARCH_DECISIONS")) << "\"\n";
+    out << "    \"line_search_decisions_profiled\": \"" << JsonEscape(EnvValue("GENPD_PROFILE_LINE_SEARCH_DECISIONS")) << "\",\n";
+    out << "    \"energy_audit\": \"" << JsonEscape(EnvValue("GENPD_ENERGY_AUDIT")) << "\",\n";
+    out << "    \"xpbd_fuse_apply_collision\": \"" << JsonEscape(EnvValue("GENPD_XPBD_FUSE_APPLY_COLLISION")) << "\"\n";
 	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";
