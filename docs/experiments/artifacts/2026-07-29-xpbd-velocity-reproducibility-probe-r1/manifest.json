@@ -1,0 +1,78 @@
+{
+    "protocol_version":  "xpbd-velocity-reproducibility-probe-v1",
+    "label":  "diagnostic-20260729-xpbd-velocity-repro-r1",
+    "git_commit":  "241fe67be66467207540bcac6c39877870bfeaa9",
+    "hardware":  {
+                     "gpu_name":  "NVIDIA GeForce RTX 3070 Laptop GPU",
+                     "nvidia_driver_version":  "581.57"
+                 },
+    "solver_variant":  "gpu-xpbd-jacobi",
+    "cloth_dimension":  128,
+    "iterations_per_frame":  32,
+    "scenes":  [
+                   {
+                       "id":  "hanging",
+                       "scene_path":  "scenes\\test_scene.xml",
+                       "control_role":  "No external collision primitive; tests whether the discrepancy exists without moving-contact branching."
+                   },
+                   {
+                       "id":  "moving-sphere",
+                       "scene_path":  "scenes\\moving_sphere_cloth.xml",
+                       "control_role":  "Moving sphere and plane; tests whether contact dynamics amplify a residency-condition discrepancy."
+                   }
+               ],
+    "conditions":  [
+                       {
+                           "id":  "resident-a",
+                           "force_cpu_state_roundtrip":  false,
+                           "repetition":  "a"
+                       },
+                       {
+                           "id":  "resident-b",
+                           "force_cpu_state_roundtrip":  false,
+                           "repetition":  "b"
+                       },
+                       {
+                           "id":  "forced-a",
+                           "force_cpu_state_roundtrip":  true,
+                           "repetition":  "a"
+                       },
+                       {
+                           "id":  "forced-b",
+                           "force_cpu_state_roundtrip":  true,
+                           "repetition":  "b"
+                       }
+                   ],
+    "measurement":  {
+                        "mode":  "rendered-trajectory-diagnostic",
+                        "render_width":  1600,
+                        "render_height":  900,
+                        "sync_gpu":  true,
+                        "disable_vsync":  true,
+                        "quality_readback_during_run":  true,
+                        "timing_claim":  "none"
+                    },
+    "trajectory":  {
+                       "frames":  120,
+                       "warmup":  20,
+                       "checkpoint_stride":  10
+                   },
+    "comparison_definition":  {
+                                  "repeat_pairs":  [
+                                                       "resident-a:resident-b",
+                                                       "forced-a:forced-b"
+                                                   ],
+                                  "cross_condition_pairs":  [
+                                                                "resident-a:forced-a",
+                                                                "resident-a:forced-b",
+                                                                "resident-b:forced-a",
+                                                                "resident-b:forced-b"
+                                                            ],
+                                  "interpretation":  "Compare repeated runs within one residency condition against all cross-condition pairs. Compare hanging and moving-sphere results to assess collision-associated amplification."
+                              },
+    "acceptance":  {
+                       "require_finite":  true,
+                       "require_rendered":  true,
+                       "min_matched_measured_checkpoints":  3
+                   }
+}

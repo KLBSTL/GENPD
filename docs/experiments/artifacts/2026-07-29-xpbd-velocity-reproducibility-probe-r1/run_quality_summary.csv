@@ -1,0 +1,9 @@
+scene_id,condition,force_cpu_state_roundtrip,measured_frames,measured_checkpoints,p95_mean_stretch_strain,p95_max_stretch_strain,max_penetration_depth,git_commit,gpu_name,driver,result_dir
+hanging,resident-a,0,120,12,0.00510866,1.01982,0.0,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\hanging\resident-a
+hanging,resident-b,0,120,12,0.00510347,1.01979,0.0,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\hanging\resident-b
+hanging,forced-a,1,120,12,0.00510712,1.01975,0.0,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\hanging\forced-a
+hanging,forced-b,1,120,12,0.00510824,1.01981,0.0,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\hanging\forced-b
+moving-sphere,resident-a,0,120,12,0.00512057,1.0198,0.00100024,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\moving-sphere\resident-a
+moving-sphere,resident-b,0,120,12,0.00512201,1.01984,0.00100024,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\moving-sphere\resident-b
+moving-sphere,forced-a,1,120,12,0.00512124,1.01982,0.00100036,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\moving-sphere\forced-a
+moving-sphere,forced-b,1,120,12,0.00512229,1.01979,0.00100036,241fe67,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-velocity-repro-r1\runs\moving-sphere\forced-b

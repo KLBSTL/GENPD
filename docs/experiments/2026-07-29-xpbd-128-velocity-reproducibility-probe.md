@@ -107,9 +107,9 @@ cross-device reproducibility claim.
   protocol.
 - `scripts/analyze_xpbd_velocity_reproducibility_probe.py`: artifact validator
   and pairwise checkpoint aggregation.
-- `results/diagnostic-20260729-xpbd-velocity-repro-r1/manifest.json`: exact
-  configuration and hardware metadata.
-- `results/diagnostic-20260729-xpbd-velocity-repro-r1/reproducibility_summary.csv`:
-  compact numeric evidence.
-- `results/diagnostic-20260729-xpbd-velocity-repro-r1/xpbd_velocity_reproducibility_report.md`:
-  generated raw-result report.
+- `docs/experiments/artifacts/2026-07-29-xpbd-velocity-reproducibility-probe-r1/`:
+  Git-tracked manifest, run-quality summary, pairwise checkpoint errors, and
+  generated report. These compact artifacts preserve the reported result.
+- `results/diagnostic-20260729-xpbd-velocity-repro-r1/`: ignored local raw
+  root, including the 183 files and 44.6 MiB of per-run profiles, logs, and
+  checkpoint binaries. It remains the full local audit trail.
