@@ -800,6 +800,7 @@ m_xpbd_apply_collision_shader_file = "./shaders/xpbd_apply_collision.comp";
 		glGenBuffers(1, &xpbdLambdaID);
 		glGenBuffers(1, &xpbdPinID);
 		glGenBuffers(1, &xpbdEdgeCorrectionID);
+		glGenBuffers(1, &xpbdVertexIncidenceID);
 		glGenBuffers(1, &adaptiveLineSearchStateID);
 		ensureAdaptiveLineSearchState();
 		resetAdaptiveLineSearchState();
@@ -1052,14 +1053,32 @@ void Simulation::rebuildCSAdjacency()
 	}
 
 	m_cs_vertex_edge_indices.assign(adjacency_count, 0u);
+	// Pack endpoint orientation once while building CSR. The high bit is safe
+	// because the shader edge index is constrained to 31 bits.
+	const unsigned int kSecondEndpointBit = 0x80000000u;
+	const unsigned int kInvalidXPBDIncidence = 0xffffffffu;
+	m_cs_xpbd_vertex_incidences.assign(adjacency_count, kInvalidXPBDIncidence);
 	std::vector<unsigned int> cursor = m_cs_vertex_edge_offsets;
 	for (unsigned int edge_index = 0; edge_index < m_mesh->my_edge.size(); ++edge_index)
 	{
 		const Edge& edge = m_mesh->my_edge[edge_index];
-		m_cs_vertex_edge_indices[cursor[edge.m_v1]++] = edge_index;
+		if ((edge_index & kSecondEndpointBit) != 0u)
+		{
+			throw std::runtime_error("Too many XPBD edges for signed-incidence encoding.");
+		}
+
+		const unsigned int first_offset = cursor[edge.m_v1]++;
+		m_cs_vertex_edge_indices[first_offset] = edge_index;
+		if (edge.fixed_point != 1)
+		{
+			m_cs_xpbd_vertex_incidences[first_offset] = edge_index;
+		}
+
 		if (edge.fixed_point != 1 && edge.m_v2 != edge.m_v1)
 		{
-			m_cs_vertex_edge_indices[cursor[edge.m_v2]++] = edge_index;
+			const unsigned int second_offset = cursor[edge.m_v2]++;
+			m_cs_vertex_edge_indices[second_offset] = edge_index;
+			m_cs_xpbd_vertex_incidences[second_offset] = edge_index | kSecondEndpointBit;
 		}
 	}
 
@@ -1114,6 +1133,11 @@ bool Simulation::validateCSAdjacency(std::string& reason) const
 		reason = "CSR terminal offset does not match adjacency count";
 		return false;
 	}
+	if (m_cs_xpbd_vertex_incidences.size() != m_cs_vertex_edge_indices.size())
+	{
+		reason = "XPBD signed-incidence count does not match CSR adjacency count.";
+		return false;
+	}
 
 	for (unsigned int vertex_index = 0; vertex_index < vertex_count; ++vertex_index)
 	{
@@ -1151,6 +1175,18 @@ bool Simulation::validateCSAdjacency(std::string& reason) const
 			if (!incident)
 			{
 				reason = "CSR edge is stored under a non-incident vertex";
+				return false;
+			}
+
+			const unsigned int incidence = m_cs_xpbd_vertex_incidences[offset];
+			const unsigned int kSecondEndpointBit = 0x80000000u;
+			const unsigned int kInvalidXPBDIncidence = 0xffffffffu;
+			const unsigned int expected_incidence = is_attachment
+				? kInvalidXPBDIncidence
+				: (edge.m_v1 == vertex_index ? edge_index : (edge_index | kSecondEndpointBit));
+			if (incidence != expected_incidence)
+			{
+				reason = "XPBD signed incidence has incorrect endpoint orientation";
 				return false;
 			}
 			++occurrence_count[edge_index];
@@ -1205,6 +1241,14 @@ void Simulation::uploadCSResourcesIfNeeded()
 			GL_DYNAMIC_DRAW);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
 
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, xpbdVertexIncidenceID);
+		glBufferData(
+			GL_SHADER_STORAGE_BUFFER,
+			m_cs_xpbd_vertex_incidences.size() * sizeof(unsigned int),
+			m_cs_xpbd_vertex_incidences.empty() ? NULL : m_cs_xpbd_vertex_incidences.data(),
+			GL_DYNAMIC_DRAW);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 25, xpbdVertexIncidenceID);
+
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, xpbdPinID);
 		glBufferData(
 			GL_SHADER_STORAGE_BUFFER,
@@ -1229,6 +1273,7 @@ void Simulation::uploadCSResourcesIfNeeded()
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, edgeID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, vertexEdgeOffsetID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 25, xpbdVertexIncidenceID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, xpbdPinID);
 	}
@@ -1866,6 +1911,7 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 	if (use_vertex_gather)
 	{
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 24, xpbdEdgeCorrectionID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 25, xpbdVertexIncidenceID);
 	}
 	else
 	{
@@ -2447,6 +2493,7 @@ Simulation::~Simulation()
 	glDeleteBuffers(1, &xpbdLambdaID);
 	glDeleteBuffers(1, &xpbdPinID);
 	glDeleteBuffers(1, &xpbdEdgeCorrectionID);
+	glDeleteBuffers(1, &xpbdVertexIncidenceID);
 	glDeleteBuffers(1, &adaptiveLineSearchStateID);
 	if (pUBO != 0)
 	{

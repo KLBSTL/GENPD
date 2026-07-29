@@ -38,8 +38,15 @@ layout(std430, binding = 12) readonly buffer VertexEdgeIndexBuffer { uint edge_i
 layout(std430, binding = 13) readonly buffer MassDiagBuffer { float mass_diag[]; };
 layout(std430, binding = 23) readonly buffer XPBDPinBuffer { vec4 pins[]; };
 layout(std430, binding = 24) readonly buffer EdgeCorrectionBuffer { vec4 corrections[]; };
+// Low 31 bits: spring edge id. High bit: current vertex is the second endpoint.
+// 0xffffffff represents an attachment, which is handled by XPBDPinBuffer.
+layout(std430, binding = 25) readonly buffer XPBDVertexIncidenceBuffer { uint incidences[]; };
 
 uniform int use_cached_pins;
+
+const uint SECOND_ENDPOINT_BIT = 0x80000000u;
+const uint EDGE_INDEX_MASK = 0x7fffffffu;
+const uint INVALID_INCIDENCE = 0xffffffffu;
 
 void main()
 {
@@ -50,20 +57,20 @@ void main()
 
     vec3 correction_sum = vec3(0.0);
     float contribution_count = 0.0;
+    uint mass_base = vertex_index * 3u;
+    float weight = 1.0 / max(mass_diag[mass_base], 1.0e-12);
     for (uint cursor = offsets[vertex_index]; cursor < offsets[vertex_index + 1u]; ++cursor) {
-        uint edge_index = edge_indices[cursor];
-        Edge edge = edges[edge_index];
-        if (edge.fixed_point == 1) {
+        uint incidence = incidences[cursor];
+        if (incidence == INVALID_INCIDENCE) {
             continue;
         }
 
+        uint edge_index = incidence & EDGE_INDEX_MASK;
         vec4 edge_correction = corrections[edge_index];
         if (edge_correction.w == 0.0) {
             continue;
         }
-        uint mass_base = vertex_index * 3u;
-        float weight = 1.0 / max(mass_diag[mass_base], 1.0e-12);
-        correction_sum += (edge.m_v1 == vertex_index) ? weight * edge_correction.xyz : -weight * edge_correction.xyz;
+        correction_sum += ((incidence & SECOND_ENDPOINT_BIT) == 0u) ? weight * edge_correction.xyz : -weight * edge_correction.xyz;
         contribution_count += edge_correction.w;
     }
 

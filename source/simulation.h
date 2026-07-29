@@ -498,7 +498,7 @@ unsigned int m_quality_checkpoint_stride;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
 	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
-	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID, xpbdPinID, xpbdEdgeCorrectionID, adaptiveLineSearchStateID;
+	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID, xpbdPinID, xpbdEdgeCorrectionID, xpbdVertexIncidenceID, adaptiveLineSearchStateID;
 	bool m_cs_render_position_valid;
 	bool m_cs_gpu_state_valid;
 	bool m_cs_cpu_state_stale;
@@ -511,6 +511,7 @@ bool m_xpbd_cached_pins;
 	std::vector<float> test_;
 	std::vector<unsigned int> m_cs_vertex_edge_offsets;
 	std::vector<unsigned int> m_cs_vertex_edge_indices;
+	std::vector<unsigned int> m_cs_xpbd_vertex_incidences;
 	std::vector<glm::vec4> m_cs_xpbd_pins;
 	std::vector<CollisionPrimitiveGPU> m_cs_collision_primitives;
 	std::vector<ScalarType> m_cs_mass_diagonal;
