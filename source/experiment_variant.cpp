@@ -39,6 +39,10 @@ bool GenPDParseExperimentVariant(const std::string& value, GenPDExperimentVarian
 	{
 		variant = GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT;
 	}
+	else if (value == "gpu-xpbd-vertex-gather")
+	{
+		variant = GENPD_VARIANT_GPU_XPBD_VERTEX_GATHER;
+	}
 	else if (value == "gpu-xpbd-jacobi")
 	{
 		variant = GENPD_VARIANT_GPU_XPBD_JACOBI;
@@ -79,6 +83,8 @@ const char* GenPDExperimentVariantName()
 		return "gpu-gather-fusion-batched-ls";
 	case GENPD_VARIANT_GPU_GATHER_FUSION_ADAPTIVE_LS_PERSISTENT:
 		return "gpu-gather-fusion-adaptive-ls-persistent";
+	case GENPD_VARIANT_GPU_XPBD_VERTEX_GATHER:
+		return "gpu-xpbd-vertex-gather";
 	case GENPD_VARIANT_GPU_XPBD_JACOBI:
 		return "gpu-xpbd-jacobi";
 	case GENPD_VARIANT_GPU_GATHER_FUSION_BATCHED_LS_PERSISTENT:
@@ -90,7 +96,8 @@ const char* GenPDExperimentVariantName()
 bool GenPDExperimentUsesCSNCG()
 {
 	return g_experiment_variant != GENPD_VARIANT_CPU_NCG
-		&& g_experiment_variant != GENPD_VARIANT_GPU_XPBD_JACOBI;
+		&& g_experiment_variant != GENPD_VARIANT_GPU_XPBD_JACOBI
+		&& g_experiment_variant != GENPD_VARIANT_GPU_XPBD_VERTEX_GATHER;
 }
 
 bool GenPDExperimentUsesEdgeScatter()
@@ -128,5 +135,11 @@ bool GenPDExperimentUsesPersistentBuffers()
 
 bool GenPDExperimentUsesGPUXPBD()
 {
-	return g_experiment_variant == GENPD_VARIANT_GPU_XPBD_JACOBI;
+	return g_experiment_variant == GENPD_VARIANT_GPU_XPBD_JACOBI
+		|| g_experiment_variant == GENPD_VARIANT_GPU_XPBD_VERTEX_GATHER;
+}
+
+bool GenPDExperimentUsesGPUXPBDVertexGather()
+{
+	return g_experiment_variant == GENPD_VARIANT_GPU_XPBD_VERTEX_GATHER;
 }

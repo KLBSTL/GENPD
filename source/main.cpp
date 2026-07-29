@@ -1224,7 +1224,7 @@ void parse_command_line(int argc, char** argv)
 				<< "                              gpu-gather-fusion | gpu-gather-fusion-batched-ls |\n"
 				<< "                              gpu-gather-fusion-serial-ls-persistent |\n"
 				<< "                              gpu-gather-fusion-batched-ls-persistent |\n"
-				<< "                              gpu-gather-fusion-adaptive-ls-persistent | gpu-xpbd-jacobi.\n"
+				<< "                              gpu-gather-fusion-adaptive-ls-persistent | gpu-xpbd-jacobi | gpu-xpbd-vertex-gather.\n"
 				<< "  --print-paths               Print resolved project/output/executable paths.\n"
 				<< "  --benchmark-swing-attachments\n"
 				<< "                              Move attachment constraints during benchmark.\n";

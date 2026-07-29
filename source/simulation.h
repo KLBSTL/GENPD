@@ -491,14 +491,14 @@ unsigned int m_quality_checkpoint_stride;
 	bool use_cs = true;
 	GLuint gradient_shader, gradient_scatter_shader, gradient_finalize_shader, energy_shader, descent_shader, iner_shader,
 		energy_for_linesearch_shader, colliEnergy_shader, objective_shader,
-		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader, xpbd_apply_collision_shader, adaptive_ls_reset_shader;
+		choose_valid_shader, choose_final_shader, compute_shader, computeX_shader, collision_resolve_shader, normal_from_triangles_shader, cs2_state_shader, xpbd_constraints_shader, xpbd_apply_shader, xpbd_constraints_gather_shader, xpbd_apply_gather_shader, xpbd_apply_collision_shader, adaptive_ls_reset_shader;
 
 	GLuint gradient_program, gradient_scatter_program, gradient_finalize_program, energy_program, computeX_program, descent_program, iner_program,
-		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program, xpbd_apply_collision_program, adaptive_ls_reset_program;
+		energy_for_linesearch_program, colliEnergy_program, objective_program, choose_valid_program, choose_final_program, compute_program, collision_resolve_program, normal_from_triangles_program, cs2_state_program, xpbd_constraints_program, xpbd_apply_program, xpbd_constraints_gather_program, xpbd_apply_gather_program, xpbd_apply_collision_program, adaptive_ls_reset_program;
 
 	GLuint edgeID, gradientID, xID, energyID, fixededgesID, FlagID, ResultID, DescentID, m_yID, inerID, testID;
 	GLuint vertexEdgeOffsetID, vertexEdgeIndexID, attachmentID, collisionVelocityID, collisionPrimitiveID, csNormalID;
-	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID, xpbdPinID, adaptiveLineSearchStateID;
+	GLuint csPositionID, csStateStatsID, xpbdDeltaID, xpbdLambdaID, xpbdPinID, xpbdEdgeCorrectionID, adaptiveLineSearchStateID;
 	bool m_cs_render_position_valid;
 	bool m_cs_gpu_state_valid;
 	bool m_cs_cpu_state_stale;
@@ -1180,7 +1180,9 @@ void main() {
 	std::string m_normal_from_triangles_shader_file;
 	std::string m_cs2_state_shader_file;
 std::string m_xpbd_constraints_shader_file;
+std::string m_xpbd_constraints_gather_shader_file;
 std::string m_xpbd_apply_shader_file;
+std::string m_xpbd_apply_gather_shader_file;
 std::string m_xpbd_apply_collision_shader_file;
 std::string m_adaptive_ls_reset_shader_file;
 

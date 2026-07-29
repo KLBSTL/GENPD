@@ -36,14 +36,15 @@ if ($helpText -notmatch '--solver-variant') {
     'gpu-gather-fusion-batched-ls',
     'gpu-gather-fusion-batched-ls-persistent',
     'gpu-gather-fusion-adaptive-ls-persistent',
-    'gpu-xpbd-jacobi'
+    'gpu-xpbd-jacobi',
+    'gpu-xpbd-vertex-gather'
 ) | ForEach-Object {
     if ($helpText -notmatch [regex]::Escape($_)) {
         throw "GenPD --help does not document solver variant $_"
     }
 }
 
-@('shaders\\gradient_scatter.comp', 'shaders\\gradient_finalize.comp', 'shaders\\xpbd_constraints.comp', 'shaders\\xpbd_apply.comp') | ForEach-Object {
+@('shaders\\gradient_scatter.comp', 'shaders\\gradient_finalize.comp', 'shaders\\xpbd_constraints.comp', 'shaders\\xpbd_apply.comp', 'shaders\\xpbd_constraints_gather.comp', 'shaders\\xpbd_apply_gather.comp') | ForEach-Object {
     if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot $_))) {
         throw "Missing solver-variant shader: $_"
     }

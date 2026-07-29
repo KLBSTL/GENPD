@@ -3,7 +3,7 @@ param(
     [string]$RunLabel = 'smoke-nsys',
     [int]$Frames = 300,
     [int]$Warmup = 30,
-    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi')]
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi', 'gpu-xpbd-vertex-gather')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [string]$OutputDir = '',
     [string]$ExePath = '',

@@ -1,0 +1,94 @@
+#version 430
+
+// Vertex-owned XPBD Jacobi apply. CSR traversal gathers every incident spring
+// correction, replacing the legacy atomic delta accumulation.
+layout(local_size_x = 256) in;
+
+layout(std140, binding = 0) uniform params {
+    float t0;
+    float beta;
+    int K;
+    int stiffness;
+    int edge_size;
+    float alpha;
+    float m_h;
+    int gradient_size;
+    int vertex_size;
+    int attachment_size;
+    int _pad0;
+    int _pad1;
+};
+
+struct Edge {
+    uint m_v1;
+    uint m_v2;
+    uint m_tri1;
+    uint m_tri2;
+    float rest_length;
+    float stiffness;
+    int fixed_point;
+    float _pad0;
+    vec4 fixed_;
+};
+
+layout(std430, binding = 0) readonly buffer EdgeBuffer { Edge edges[]; };
+layout(std430, binding = 2) buffer PositionBuffer { float x_pos[]; };
+layout(std430, binding = 11) readonly buffer VertexEdgeOffsetBuffer { uint offsets[]; };
+layout(std430, binding = 12) readonly buffer VertexEdgeIndexBuffer { uint edge_indices[]; };
+layout(std430, binding = 13) readonly buffer MassDiagBuffer { float mass_diag[]; };
+layout(std430, binding = 23) readonly buffer XPBDPinBuffer { vec4 pins[]; };
+layout(std430, binding = 24) readonly buffer EdgeCorrectionBuffer { vec4 corrections[]; };
+
+uniform int use_cached_pins;
+
+void main()
+{
+    uint vertex_index = gl_GlobalInvocationID.x;
+    if (vertex_index >= uint(vertex_size)) {
+        return;
+    }
+
+    vec3 correction_sum = vec3(0.0);
+    float contribution_count = 0.0;
+    for (uint cursor = offsets[vertex_index]; cursor < offsets[vertex_index + 1u]; ++cursor) {
+        uint edge_index = edge_indices[cursor];
+        Edge edge = edges[edge_index];
+        if (edge.fixed_point == 1) {
+            continue;
+        }
+
+        vec4 edge_correction = corrections[edge_index];
+        if (edge_correction.w == 0.0) {
+            continue;
+        }
+        uint mass_base = vertex_index * 3u;
+        float weight = 1.0 / max(mass_diag[mass_base], 1.0e-12);
+        correction_sum += (edge.m_v1 == vertex_index) ? weight * edge_correction.xyz : -weight * edge_correction.xyz;
+        contribution_count += edge_correction.w;
+    }
+
+    uint position_base = vertex_index * 3u;
+    vec3 position = vec3(x_pos[position_base], x_pos[position_base + 1u], x_pos[position_base + 2u]);
+    if (contribution_count > 0.0) {
+        position += correction_sum / contribution_count;
+    }
+
+    if (use_cached_pins != 0) {
+        vec4 pin = pins[vertex_index];
+        if (pin.w != 0.0) {
+            position = pin.xyz;
+        }
+    } else {
+        for (uint cursor = offsets[vertex_index]; cursor < offsets[vertex_index + 1u]; ++cursor) {
+            Edge edge = edges[edge_indices[cursor]];
+            if (edge.fixed_point == 1 && edge.m_v1 == vertex_index) {
+                position = edge.fixed_.xyz;
+                break;
+            }
+        }
+    }
+
+    x_pos[position_base] = position.x;
+    x_pos[position_base + 1u] = position.y;
+    x_pos[position_base + 2u] = position.z;
+}

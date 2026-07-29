@@ -3,7 +3,7 @@ param(
     [string]$RunLabel = ('benchmark-' + (Get-Date -Format 'yyyyMMdd-HHmmss')),
     [int]$Frames = 300,
     [int]$Warmup = 30,
-    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi')]
+    [ValidateSet('cpu-ncg', 'gpu-edge-scatter', 'gpu-gather-no-fusion', 'gpu-gather-fusion', 'gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi', 'gpu-xpbd-vertex-gather')]
     [string]$SolverVariant = 'gpu-gather-fusion-batched-ls-persistent',
     [int]$IterationsPerFrame = 0,
     [string]$ReferenceExportDir = '',
@@ -113,7 +113,7 @@ if ($CaptureFrame -ge 0) {
 if ($NoRender -and $RunLabel -match '^paper-') {
     throw 'Paper-labelled runs must use rendered measurements; --no-render is reserved for diagnostics and short regressions.'
 }
-if ($ForceCpuStateRoundtrip -and $SolverVariant -notin @('gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi')) {
+if ($ForceCpuStateRoundtrip -and $SolverVariant -notin @('gpu-gather-fusion-serial-ls-persistent', 'gpu-gather-fusion-batched-ls-persistent', 'gpu-gather-fusion-adaptive-ls-persistent', 'gpu-xpbd-jacobi', 'gpu-xpbd-vertex-gather')) {
     throw 'ForceCpuStateRoundtrip is defined only for GPU-resident NCG and XPBD variants.'
 }
 if ($ForceCpuStateRoundtrip -and $RunLabel -match '^paper-') {
