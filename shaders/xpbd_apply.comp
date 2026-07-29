@@ -33,7 +33,10 @@ layout(std430, binding = 0) readonly buffer EdgeBuffer { Edge edges[]; };
 layout(std430, binding = 2) buffer PositionBuffer { float x_pos[]; };
 layout(std430, binding = 11) readonly buffer VertexEdgeOffsetBuffer { uint offsets[]; };
 layout(std430, binding = 12) readonly buffer VertexEdgeIndexBuffer { uint edge_indices[]; };
+layout(std430, binding = 23) readonly buffer XPBDPinBuffer { vec4 pins[]; };
 layout(std430, binding = 21) buffer DeltaBuffer { float delta[]; };
+
+uniform int use_cached_pins;
 
 void main()
 {
@@ -51,18 +54,25 @@ void main()
         position += correction / contribution_count;
     }
 
-    bool pinned = false;
-    vec3 pin_position = position;
-    for (uint cursor = offsets[vertex_index]; cursor < offsets[vertex_index + 1u]; ++cursor) {
-        Edge edge = edges[edge_indices[cursor]];
-        if (edge.fixed_point == 1 && edge.m_v1 == vertex_index) {
-            pinned = true;
-            pin_position = edge.fixed_.xyz;
-            break;
+    if (use_cached_pins != 0) {
+        vec4 pin = pins[vertex_index];
+        if (pin.w != 0.0) {
+            position = pin.xyz;
         }
-    }
-    if (pinned) {
-        position = pin_position;
+    } else {
+        bool pinned = false;
+        vec3 pin_position = position;
+        for (uint cursor = offsets[vertex_index]; cursor < offsets[vertex_index + 1u]; ++cursor) {
+            Edge edge = edges[edge_indices[cursor]];
+            if (edge.fixed_point == 1 && edge.m_v1 == vertex_index) {
+                pinned = true;
+                pin_position = edge.fixed_.xyz;
+                break;
+            }
+        }
+        if (pinned) {
+            position = pin_position;
+        }
     }
 
     x_pos[position_base] = position.x;

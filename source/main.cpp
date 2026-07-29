@@ -159,6 +159,7 @@ bool g_cli_profile_line_search_decisions = false;
 bool g_cli_force_cpu_state_roundtrip = false;
 bool g_cli_energy_audit = false;
 int g_cli_xpbd_fuse_apply_collision = -1;
+int g_cli_xpbd_cached_pins = -1;
 bool g_cli_print_paths = false;
 
 //----------glut function handlers-----------//
@@ -355,10 +356,15 @@ if (g_cli_xpbd_fuse_apply_collision >= 0)
 {
     g_simulation->SetXPBDFuseApplyCollision(g_cli_xpbd_fuse_apply_collision != 0);
 }
+if (g_cli_xpbd_cached_pins >= 0)
+{
+    g_simulation->SetXPBDCachedPins(g_cli_xpbd_cached_pins != 0);
+}
 _putenv_s("GENPD_PROFILE_LINE_SEARCH_DECISIONS", g_cli_profile_line_search_decisions ? "1" : "0");
 _putenv_s("GENPD_FORCE_CPU_STATE_ROUNDTRIP", g_cli_force_cpu_state_roundtrip ? "1" : "0");
 _putenv_s("GENPD_ENERGY_AUDIT", g_cli_energy_audit ? "1" : "0");
 _putenv_s("GENPD_XPBD_FUSE_APPLY_COLLISION", g_cli_xpbd_fuse_apply_collision == 0 ? "0" : "1");
+_putenv_s("GENPD_XPBD_CACHED_PINS", g_cli_xpbd_cached_pins == 0 ? "0" : "1");
 if (g_cli_iterations_per_frame > 0)
 {
     g_cli_original_iterations_per_frame = g_simulation->IterationsPerFrame();
@@ -1158,6 +1164,15 @@ void parse_command_line(int argc, char** argv)
                 exit(EXIT_FAILURE);
             }
         }
+        else if (arg == "--xpbd-cached-pins" && i + 1 < argc)
+        {
+            g_cli_xpbd_cached_pins = parse_nonnegative_int(argv[++i], g_cli_xpbd_cached_pins);
+            if (g_cli_xpbd_cached_pins > 1)
+            {
+                std::cerr << "--xpbd-cached-pins must be 0 or 1." << std::endl;
+                exit(EXIT_FAILURE);
+            }
+        }
         else if (arg == "--print-paths")
 		{
 			g_cli_print_paths = true;
@@ -1181,6 +1196,7 @@ void parse_command_line(int argc, char** argv)
                 << "  --force-cpu-state-roundtrip  Diagnostic: synchronize GPU-resident position/velocity state each frame.\n"
                 << "  --energy-audit              Diagnostic: write CPU/GPU energy cross-checks; not performance data.\n"
                 << "  --xpbd-fuse-apply-collision 0|1  Fuse XPBD vertex apply and collision passes (default 1).\n"
+                << "  --xpbd-cached-pins 0|1     Cache hard-pin lookup instead of scanning CSR each XPBD iteration (default 1).\n"
                 << "  --iterations-per-frame N    Override solver iterations for a reference run.\n"
                 << "  --reference-export-dir PATH Export reference checkpoints to this directory.\n"
                 << "  --quality-reference-dir PATH Compare quality metrics with checkpoints in this directory.\n"

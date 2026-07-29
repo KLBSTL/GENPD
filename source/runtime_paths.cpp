@@ -450,7 +450,8 @@ void GenPDWriteRunMetadata(
     out << "    \"force_cpu_state_roundtrip\": \"" << JsonEscape(EnvValue("GENPD_FORCE_CPU_STATE_ROUNDTRIP")) << "\",\n";
     out << "    \"line_search_decisions_profiled\": \"" << JsonEscape(EnvValue("GENPD_PROFILE_LINE_SEARCH_DECISIONS")) << "\",\n";
     out << "    \"energy_audit\": \"" << JsonEscape(EnvValue("GENPD_ENERGY_AUDIT")) << "\",\n";
-    out << "    \"xpbd_fuse_apply_collision\": \"" << JsonEscape(EnvValue("GENPD_XPBD_FUSE_APPLY_COLLISION")) << "\"\n";
+    out << "    \"xpbd_fuse_apply_collision\": \"" << JsonEscape(EnvValue("GENPD_XPBD_FUSE_APPLY_COLLISION")) << "\",\n";
+    out << "    \"xpbd_cached_pins\": \"" << JsonEscape(EnvValue("GENPD_XPBD_CACHED_PINS")) << "\"\n";
 	out << "  },\n";
 	out << "  \"profile_gpu_queries\": " << (g_profile_gpu_queries ? "true" : "false") << ",\n";
 	out << "  \"benchmark\": {\n";

@@ -739,6 +739,7 @@ m_quality_checkpoint_stride = 1;
 	m_cs_skip_cpu_damping_once = false;
 	m_force_cs2_cpu_state_roundtrip = false;
 m_xpbd_fuse_apply_collision = true;
+m_xpbd_cached_pins = true;
 
 	m_gradient_shader_file = "./shaders/gradient.comp";
 	m_gradient_scatter_shader_file = "./shaders/gradient_scatter.comp";
@@ -787,6 +788,7 @@ m_xpbd_apply_collision_shader_file = "./shaders/xpbd_apply_collision.comp";
 		glGenBuffers(1, &csStateStatsID);
 		glGenBuffers(1, &xpbdDeltaID);
 		glGenBuffers(1, &xpbdLambdaID);
+		glGenBuffers(1, &xpbdPinID);
 		glGenBuffers(1, &adaptiveLineSearchStateID);
 		ensureAdaptiveLineSearchState();
 		resetAdaptiveLineSearchState();
@@ -1048,6 +1050,18 @@ void Simulation::rebuildCSAdjacency()
 		}
 	}
 
+	// The legacy XPBD vertex pass scans this CSR solely to discover a hard pin.
+	// Cache the first attachment per vertex in the same edge order for an exact fast path.
+	m_cs_xpbd_pins.assign(vertex_count, glm::vec4(0.0f));
+	for (unsigned int edge_index = 0; edge_index < m_mesh->my_edge.size(); ++edge_index)
+	{
+		const Edge& edge = m_mesh->my_edge[edge_index];
+		if (edge.fixed_point == 1 && m_cs_xpbd_pins[edge.m_v1].w == 0.0f)
+		{
+			m_cs_xpbd_pins[edge.m_v1] = glm::vec4(edge.fixed_.x, edge.fixed_.y, edge.fixed_.z, 1.0f);
+		}
+	}
+
 	std::string adjacency_reason;
 	if (!validateCSAdjacency(adjacency_reason))
 	{
@@ -1178,6 +1192,14 @@ void Simulation::uploadCSResourcesIfNeeded()
 			GL_DYNAMIC_DRAW);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
 
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, xpbdPinID);
+		glBufferData(
+			GL_SHADER_STORAGE_BUFFER,
+			m_cs_xpbd_pins.size() * sizeof(glm::vec4),
+			m_cs_xpbd_pins.empty() ? NULL : m_cs_xpbd_pins.data(),
+			GL_DYNAMIC_DRAW);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, xpbdPinID);
+
 		glBindBuffer(GL_SHADER_STORAGE_BUFFER, attachmentID);
 		glBufferData(
 			GL_SHADER_STORAGE_BUFFER,
@@ -1195,6 +1217,7 @@ void Simulation::uploadCSResourcesIfNeeded()
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, vertexEdgeOffsetID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, xpbdPinID);
 	}
 }
 
@@ -1815,6 +1838,7 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, vertexEdgeOffsetID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, vertexEdgeIndexID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 13, attachmentID);
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 23, xpbdPinID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 21, xpbdDeltaID);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 22, xpbdLambdaID);
 
@@ -1879,11 +1903,13 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 			static GLint fused_primitive_count_location = -1;
 			static GLint fused_restitution_location = -1;
 			static GLint fused_friction_location = -1;
+			static GLint fused_cached_pins_location = -1;
 			if (fused_primitive_count_location < 0)
 			{
 				fused_primitive_count_location = glGetUniformLocation(xpbd_apply_collision_program, "primitive_count");
 				fused_restitution_location = glGetUniformLocation(xpbd_apply_collision_program, "restitution_coefficient");
 				fused_friction_location = glGetUniformLocation(xpbd_apply_collision_program, "friction_coefficient");
+				fused_cached_pins_location = glGetUniformLocation(xpbd_apply_collision_program, "use_cached_pins");
 			}
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 16, collisionVelocityID);
 			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 17, collisionPrimitiveID);
@@ -1891,6 +1917,7 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 			glUniform1ui(fused_primitive_count_location, static_cast<GLuint>(m_cs_collision_primitives.size()));
 			glUniform1f(fused_restitution_location, static_cast<float>(m_restitution_coefficient));
 			glUniform1f(fused_friction_location, static_cast<float>(m_friction_coefficient));
+			glUniform1i(fused_cached_pins_location, m_xpbd_cached_pins ? 1 : 0);
 			++g_cs_profile_xpbd_apply_dispatches;
 			++g_cs_profile_xpbd_collision_dispatches;
 			++g_cs_profile_xpbd_fused_apply_collision_dispatches;
@@ -1901,7 +1928,13 @@ bool Simulation::performGPUXPBD(VectorX& x, bool use_gpu_resident_state)
 		{
 			{
 				ScopedCSDebugGroup apply_group("GenPD XPBD vertex apply");
+				static GLint apply_cached_pins_location = -1;
+				if (apply_cached_pins_location < 0)
+				{
+					apply_cached_pins_location = glGetUniformLocation(xpbd_apply_program, "use_cached_pins");
+				}
 				glUseProgram(xpbd_apply_program);
+				glUniform1i(apply_cached_pins_location, m_xpbd_cached_pins ? 1 : 0);
 				++g_cs_profile_xpbd_apply_dispatches;
 				glDispatchCompute(vertex_groups, 1, 1);
 				glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
@@ -2358,6 +2391,7 @@ Simulation::~Simulation()
 	glDeleteBuffers(1, &csStateStatsID);
 	glDeleteBuffers(1, &xpbdDeltaID);
 	glDeleteBuffers(1, &xpbdLambdaID);
+	glDeleteBuffers(1, &xpbdPinID);
 	glDeleteBuffers(1, &adaptiveLineSearchStateID);
 	if (pUBO != 0)
 	{
@@ -2728,6 +2762,11 @@ void Simulation::SetEnergyAudit(bool enabled)
 void Simulation::SetXPBDFuseApplyCollision(bool enabled)
 {
 	m_xpbd_fuse_apply_collision = enabled;
+}
+
+void Simulation::SetXPBDCachedPins(bool enabled)
+{
+	m_xpbd_cached_pins = enabled;
 }
 
 void Simulation::LogXPBDEnergyAudit(unsigned int frame)
