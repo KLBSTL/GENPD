@@ -1,0 +1,5 @@
+"run_order","id","solver_variant","reduction","result_dir"
+"1","atomic-a","gpu-xpbd-jacobi","float-atomic-scatter","runs\atomic-a"
+"2","gather-a","gpu-xpbd-vertex-gather","fixed-order-vertex-gather","runs\gather-a"
+"3","gather-b","gpu-xpbd-vertex-gather","fixed-order-vertex-gather","runs\gather-b"
+"4","atomic-b","gpu-xpbd-jacobi","float-atomic-scatter","runs\atomic-b"

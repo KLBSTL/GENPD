@@ -1,0 +1,42 @@
+{
+  "protocol": "xpbd-atomic-causality-probe-v1",
+  "git_commit": "f2e62687704160d4903990a964b34c3a11fc3e7b",
+  "verdict": "strong-support-for-atomic-scatter-causality",
+  "strong_support": true,
+  "atomic_repeat": {
+    "pair_type": "atomic-repeat",
+    "pair": "atomic-a:atomic-b",
+    "matched_checkpoints": 12,
+    "checkpoint_sha256_all_equal": 0,
+    "position_rel_l2_p95": 6.1009991668630166e-05,
+    "position_rel_l2_max": 6.1009991668630166e-05,
+    "velocity_rel_l2_p95": 0.009649537960004525,
+    "velocity_rel_l2_max": 0.009649537960004525,
+    "velocity_difference_rms_p95": 0.0008207769905779473,
+    "velocity_reference_rms_p50": 0.06006485343061093
+  },
+  "gather_repeat": {
+    "pair_type": "gather-repeat",
+    "pair": "gather-a:gather-b",
+    "matched_checkpoints": 12,
+    "checkpoint_sha256_all_equal": 1,
+    "position_rel_l2_p95": 0.0,
+    "position_rel_l2_max": 0.0,
+    "velocity_rel_l2_p95": 0.0,
+    "velocity_rel_l2_max": 0.0,
+    "velocity_difference_rms_p95": 0.0,
+    "velocity_reference_rms_p50": 0.060064968682141825
+  },
+  "physical_comparability": {
+    "atomic_p95_mean_stretch": 0.0051196950000000005,
+    "gather_p95_mean_stretch": 0.00512012,
+    "atomic_p95_max_stretch": 1.019825,
+    "gather_p95_max_stretch": 1.01983,
+    "atomic_max_penetration": 0.00100024,
+    "gather_max_penetration": 0.00100036,
+    "mean_stretch_relative_difference": 8.30127575957573e-05,
+    "max_stretch_relative_difference": 4.902801951347296e-06,
+    "penetration_absolute_difference": 1.200000000001547e-07,
+    "comparable": 1
+  }
+}

@@ -1,0 +1,64 @@
+{
+    "protocol_version":  "xpbd-atomic-causality-probe-v1",
+    "label":  "diagnostic-20260729-xpbd-atomic-causality-r1",
+    "git_commit":  "f2e62687704160d4903990a964b34c3a11fc3e7b",
+    "hardware":  {
+                     "gpu_name":  "NVIDIA GeForce RTX 3070 Laptop GPU",
+                     "nvidia_driver_version":  "581.57"
+                 },
+    "scene_id":  "moving-sphere",
+    "scene_path":  "scenes\\moving_sphere_cloth.xml",
+    "cloth_dimension":  128,
+    "iterations_per_frame":  32,
+    "runs":  [
+                 {
+                     "id":  "atomic-a",
+                     "solver_variant":  "gpu-xpbd-jacobi",
+                     "reduction":  "float-atomic-scatter"
+                 },
+                 {
+                     "id":  "gather-a",
+                     "solver_variant":  "gpu-xpbd-vertex-gather",
+                     "reduction":  "fixed-order-vertex-gather"
+                 },
+                 {
+                     "id":  "gather-b",
+                     "solver_variant":  "gpu-xpbd-vertex-gather",
+                     "reduction":  "fixed-order-vertex-gather"
+                 },
+                 {
+                     "id":  "atomic-b",
+                     "solver_variant":  "gpu-xpbd-jacobi",
+                     "reduction":  "float-atomic-scatter"
+                 }
+             ],
+    "measurement":  {
+                        "mode":  "rendered-trajectory-diagnostic",
+                        "render_width":  1600,
+                        "render_height":  900,
+                        "sync_gpu":  true,
+                        "disable_vsync":  true,
+                        "timing_claim":  "none"
+                    },
+    "trajectory":  {
+                       "frames":  120,
+                       "warmup":  20,
+                       "checkpoint_stride":  10
+                   },
+    "causality":  {
+                      "atomic_repeat":  "atomic-a:atomic-b",
+                      "gather_repeat":  "gather-a:gather-b",
+                      "gather_hash_requirement":  "all matched checkpoint files must have equal SHA-256 digests",
+                      "atomic_signal_velocity_rel_l2_p95":  0.001,
+                      "gather_repeat_velocity_rel_l2_p95_max":  1E-07,
+                      "physical_mean_stretch_relative_difference_max":  0.02,
+                      "physical_max_stretch_relative_difference_max":  0.02,
+                      "physical_penetration_absolute_difference_max":  1E-05,
+                      "conclusion_rule":  "Strong support requires a nonidentical atomic repeat above the signal threshold, an exact gather repeat below the gather threshold, and comparable physical metrics."
+                  },
+    "acceptance":  {
+                       "require_finite":  true,
+                       "require_rendered":  true,
+                       "min_matched_measured_checkpoints":  3
+                   }
+}

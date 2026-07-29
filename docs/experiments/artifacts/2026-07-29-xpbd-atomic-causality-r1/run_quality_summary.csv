@@ -1,0 +1,5 @@
+run_id,solver_variant,reduction,measured_frames,measured_checkpoints,p95_mean_stretch_strain,p95_max_stretch_strain,max_penetration_depth,git_commit,gpu_name,driver,result_dir
+atomic-a,gpu-xpbd-jacobi,float-atomic-scatter,120,12,0.00511962,1.01985,0.00100024,f2e6268,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-atomic-causality-r1\runs\atomic-a
+gather-a,gpu-xpbd-vertex-gather,fixed-order-vertex-gather,120,12,0.00512012,1.01983,0.00100036,f2e6268,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-atomic-causality-r1\runs\gather-a
+gather-b,gpu-xpbd-vertex-gather,fixed-order-vertex-gather,120,12,0.00512012,1.01983,0.00100036,f2e6268,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-atomic-causality-r1\runs\gather-b
+atomic-b,gpu-xpbd-jacobi,float-atomic-scatter,120,12,0.00511977,1.0198,0.00100024,f2e6268,NVIDIA GeForce RTX 3070 Laptop GPU,581.57,D:\GenPD_test_p\GenPD\results\diagnostic-20260729-xpbd-atomic-causality-r1\runs\atomic-b
