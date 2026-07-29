@@ -12,7 +12,8 @@ param(
     [string] $CaptureOutput = '',
     [string] $PeridynoRoot = (Join-Path $PSScriptRoot '..\..\external\peridyno-ppm'),
     [string] $BuildDir = '',
-    [string] $OutputDir = ''
+    [string] $OutputDir = '',
+    [switch] $SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -70,14 +71,25 @@ if (!(Test-Path $cmake)) {
     $cmake = 'cmake.exe'
 }
 
-& $cmake -S $PeridynoRoot -B $BuildDir
-if ($LASTEXITCODE -ne 0) {
-    throw 'PeriDyno CMake configure failed.'
-}
+if (-not $SkipBuild) {
+    # PeriDyno's CMake generator emits normal progress on stderr. Keep that
+    # diagnostic stream, then decide success from CMake's explicit exit code.
+    $previousCmakeErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    & $cmake -S $PeridynoRoot -B $BuildDir
+    $configureExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousCmakeErrorAction
+    if ($configureExitCode -ne 0) {
+        throw 'PeriDyno CMake configure failed.'
+    }
 
-& $cmake --build $BuildDir --config Release --target GenPD_PPM_OperatingPoint --parallel 8
-if ($LASTEXITCODE -ne 0) {
-    throw 'PeriDyno PPM adapter build failed.'
+    $ErrorActionPreference = 'Continue'
+    & $cmake --build $BuildDir --config Release --target GenPD_PPM_OperatingPoint --parallel 8
+    $buildExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousCmakeErrorAction
+    if ($buildExitCode -ne 0) {
+        throw 'PeriDyno PPM adapter build failed.'
+    }
 }
 
 $peridynoCommit = (git -c "safe.directory=$PeridynoRoot" -C $PeridynoRoot rev-parse HEAD).Trim()

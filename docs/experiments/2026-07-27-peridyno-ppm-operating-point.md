@@ -84,11 +84,52 @@ Windows reclaims that one-shot process resource; startup and process teardown
 are outside the reported per-frame interval. This is an adapter lifecycle
 workaround, not a solver timing optimization.
 
+## Formal Rendered Operating-Point Protocol
+
+The first formal PPM point uses `128 x 128` vertices for both mapped scenes.
+Each scene is measured in three independent repetitions of 30 warm-up frames
+and 300 measured frames. Each measured frame advances 33 PPM substeps at
+`dt=0.001` with 10 PPM solver iterations per substep, then executes the actual
+`1600 x 900` graphics update, draw, and buffer swap. The primary metric is
+`frame_host_ms`; the CUDA-event `simulation_gpu_ms` value is retained as a
+solver-side diagnostic only.
+
+Run the protocol with:
+
+```powershell
+scripts\run_peridyno_ppm_formal_operating_point.ps1 -RunLabel paper-20260729-ppm-r1
+```
+
+The formal runner records the GenPD commit, PeriDyno revision, GPU model,
+NVIDIA driver, all run parameters, per-repetition means, and pooled P50/P95
+frame statistics. It refuses any run lacking 300 finite rendered records or a
+finite final PPM state. A BMP proof is captured for the first repetition of
+each scene only after timing.
+
+This remains operating point only. The PPM model, material, and convergence
+criterion are not identical to GenPD, so this protocol cannot support an
+equal-quality PPM-versus-GenPD speedup claim.
+
+## Formal Result: PPM r1
+
+`results/paper-20260729-ppm-r1/` contains the first formal rendered PPM
+operating point on an NVIDIA GeForce RTX 3070 Laptop GPU, driver 581.57. With
+16,384 vertices, the hanging scene measured `91.70 +/- 1.67 ms` per frame and
+the moving-sphere scene measured `171.37 +/- 2.81 ms` per frame (mean +/-
+sample standard deviation over three per-repetition means; 900 measured frames
+per scene). The pooled P95 values are `96.39 ms` and `191.83 ms`, respectively.
+All six runs have 30 warm-up plus 300 measured rendered frames and a finite
+final state. The raw CSV files, manifest, source hashes, and BMP proofs remain
+under that result root.
+
+These numbers are reportable only as labeled same-hardware PPM operating-point
+context. They must not be plotted as an equal-quality speedup against GenPD.
+
 These records are still not an equal-quality PPM-versus-GenPD speed ranking.
-They become paper-eligible external operating-point evidence only after the
-rendered output is visually checked and a documented cross-model quality
-protocol is satisfied. Until then, they establish that the external 2024 solver
-runs on the same GPU and supports the mapped current-project contact scenario.
+They are paper-eligible as external operating-point evidence after the rendered
+output is visually checked, with the limitation above kept beside the result.
+An equal-quality comparison would require a separately defined cross-model
+quality protocol.
 
 ## Required Reporting Boundary
 
